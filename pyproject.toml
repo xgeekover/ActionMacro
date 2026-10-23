@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "action-macro"
+version = "0.1.0"
+description = "ActionMacro: Cross-platform precision desktop automation tool"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Developer" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Desktop Environment",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "pyside6>=6.6",
+    "pynput>=1.7",
+    "opencv-python-headless>=4.8",
+    "pillow>=10.0",
+    "mss>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-qt>=4.4",
+]
+
+[project.scripts]
+action-macro = "action_macro.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/action_macro"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "unit: Pure unit tests without OS hardware dependencies",
+    "e2e: End-to-end integration scenario tests",
+]

@@ -1,0 +1,44 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Agent caches and logs
+.agents/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build and packaging
+dist/
+build/
+*.egg-info/
+
+# Qt / PySide caches
+.qmlcache/
+.rcc/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
