@@ -179,6 +179,15 @@ def build_key_chord(modifiers: Any, keys: Any) -> List[str]:
     return chord
 
 
+def _display_key_name(key: str) -> str:
+    """Display form of a key without a platform symbol: ``A``, ``F5``, ``Home``, ``Page Up``."""
+    if len(key) <= 2:
+        return key.upper()
+    if "_" in key:
+        return " ".join(part.capitalize() for part in key.split("_") if part)
+    return key.capitalize()
+
+
 def format_key_combo(keys: List[str], platform_name: Optional[str] = None) -> str:
     """
     Format a list of keys for user display based on platform conventions.
@@ -199,7 +208,7 @@ def format_key_combo(keys: List[str], platform_name: Optional[str] = None) -> st
             "tab": "⇥",
             "space": "Space",
         }
-        return " + ".join([display_map.get(k, k.upper() if len(k) <= 2 else k.capitalize()) for k in resolved])
+        return " + ".join([display_map.get(k, _display_key_name(k)) for k in resolved])
     else:
         display_map = {
             "cmd": "Win",
@@ -211,7 +220,7 @@ def format_key_combo(keys: List[str], platform_name: Optional[str] = None) -> st
             "space": "Space",
             "tab": "Tab",
         }
-        return " + ".join([display_map.get(k, k.upper() if len(k) <= 2 else k.capitalize()) for k in resolved])
+        return " + ".join([display_map.get(k, _display_key_name(k)) for k in resolved])
 
 
 # ---------------------------------------------------------------------------

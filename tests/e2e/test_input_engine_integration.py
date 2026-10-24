@@ -21,7 +21,7 @@ from typing import Any, Callable, List, Optional, Tuple
 
 import pytest
 
-from action_macro.core.key_mapping import to_pynput_key
+from action_macro.core.key_mapping import format_key_combo, to_pynput_key
 from action_macro.core.models import (
     ActionBlock,
     ActionType,
@@ -276,7 +276,8 @@ def test_saved_modifiers_survive_editing_in_inspector(
 
     card = ActionCardWidget(_key_block(KeyInputParams(keys=keys, modifiers=modifiers)), 0, 1)
     qtbot.addWidget(card)
-    assert f"[{shown}]" in card.lbl_summary.text()
+    # The card shows the whole chord, formatted like the inspector's chip ("⌘ + C").
+    assert card.lbl_summary.text() == f"Press {format_key_combo(names)}"
 
     engine = _engine_for(_key_block(params))
     assert engine.run() is True

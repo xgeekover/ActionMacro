@@ -189,6 +189,5 @@ def test_scenario_builder_update_action_block(qtbot):
         builder.update_action_block(act)
 
     assert card.lbl_title.text() == "New Custom Description"
-    assert "Coords: (999, 888)" in card.lbl_summary.text()
-    assert "Button: right" in card.lbl_summary.text()
-    assert "Clicks: 2" in card.lbl_summary.text()
+    # The card summary is a sentence now: point, button and click count in one line.
+    assert card.lbl_summary.text() == "Double-click right at (999, 888)"

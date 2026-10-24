@@ -22,20 +22,39 @@ from PySide6.QtGui import (
     QColor,
     QCursor,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QImage,
     QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPen,
     QPixmap,
     QScreen,
+    QTransform,
 )
 from PySide6.QtWidgets import QApplication, QWidget
 
 from action_macro.engine.coordinate_transformer import CoordinateTransformer
 from action_macro.engine.input_adapter import InputAdapterProtocol
 from action_macro.engine.screen_adapter import ScreenAdapterProtocol
+from action_macro.gui import theme
+
+# Overlay styling (colours come from the theme tokens; these are opacities and metrics)
+VEIL_OPACITY = 0.34            # bg token over the whole screen
+CROSSHAIR_OPACITY = 0.95       # accent token, 1 px lines
+MAGNIFIER_GRID_OPACITY = 0.30  # bg token, lines between the zoomed pixels
+MAGNIFIER_CAPTION_HEIGHT = 18  # colour swatch + hex strip at the bottom of the magnifier
+HUD_OFFSET = 24                # distance of the magnifier group from the cursor
+HUD_MARGIN = 12                # minimum distance of the group from the screen edges
+HUD_GAP = 8                    # magnifier -> readout pill
+HUD_PILL_HEIGHT = 28
+HUD_PILL_PAD_X = 12
+HUD_HINT_GAP = 6               # readout pill -> hint line
+HUD_HINT_HEIGHT = 22
+HUD_HINT_PAD_X = 8
+HUD_HINT_TEXT = "Click to pick · Esc to cancel"
 
 
 class CoordinatePickerOverlay(QWidget):
@@ -334,7 +353,7 @@ class CoordinatePickerOverlay(QWidget):
     # -------------------------------------------------------------------------
 
     def paintEvent(self, event: Any) -> None:
-        """Paints the translucent veil, crosshairs, pixel magnifier, and HUD."""
+        """Paints the darkening veil, crosshairs, pixel magnifier, coordinate readout and hint."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
@@ -344,11 +363,10 @@ class CoordinatePickerOverlay(QWidget):
         h = self.height()
 
         # 1. Translucent dark veil over entire screen
-        painter.fillRect(self.rect(), QColor(15, 23, 42, 60))
+        painter.fillRect(self.rect(), theme.qcolor(theme.COLORS.bg, VEIL_OPACITY))
 
-        # 2. Full-screen crosshair lines (Sky-Blue #38BDF8, 1px, skipping 5px center gap)
-        crosshair_pen = QPen(QColor(56, 189, 248, 200), 1)
-        painter.setPen(crosshair_pen)
+        # 2. Full-screen crosshair lines (crisp 1px accent, skipping a small gap around the cursor)
+        painter.setPen(QPen(theme.qcolor(theme.COLORS.accent, CROSSHAIR_OPACITY), 1))
 
         # Horizontal line
         if cur_x > 4:
@@ -362,13 +380,68 @@ class CoordinatePickerOverlay(QWidget):
         if cur_y + 5 < h:
             painter.drawLine(cur_x, cur_y + 5, cur_x, h)
 
-        # Center reticle dots
-        painter.setPen(QPen(QColor(239, 68, 68, 220), 1))
+        # Centre point
+        painter.setPen(QPen(theme.qcolor(theme.COLORS.accent_text), 1))
         painter.drawPoint(cur_x, cur_y)
 
-        # 3. Magnifier and HUD Card
+        # 3. Magnifier, readout pill and hint, kept on screen near the edges
         self._paint_magnifier_and_hud(painter, cur_x, cur_y, w, h)
         painter.end()
+
+    def _hud_fonts(self) -> Tuple[QFont, QFont, QFont]:
+        """Returns the (readout, hint, caption) fonts, created once from the theme."""
+        fonts = getattr(self, "_hud_font_cache", None)
+        if fonts is None:
+            readout = theme.mono_font(theme.FONT_BODY)
+            readout.setWeight(QFont.Weight.DemiBold)
+            fonts = (readout, theme.ui_font(theme.FONT_SMALL), theme.mono_font(theme.FONT_SMALL))
+            self._hud_font_cache = fonts
+        return fonts
+
+    def _readout_parts(self) -> List[Tuple[str, bool]]:
+        """Returns the readout text as (text, is_label) runs: ``X 1280   Y 720``."""
+        return [
+            ("X", True), (f" {self.current_global_x}", False),
+            ("   ", False),
+            ("Y", True), (f" {self.current_global_y}", False),
+        ]
+
+    def readout_text(self) -> str:
+        """Returns the coordinate readout shown in the pill, e.g. ``"X 1280   Y 720"``."""
+        return "".join(text for text, _ in self._readout_parts())
+
+    def hud_rects(self, cur_x: int, cur_y: int, screen_w: int, screen_h: int) -> Tuple[QRect, QRect, QRect]:
+        """Returns the local rectangles of the (magnifier, readout pill, hint) group.
+
+        The group sits below-right of the cursor, flips to the other side of the
+        cursor when it would cross the right or bottom edge, and is finally clamped
+        so it stays on screen (as long as the screen is larger than the group).
+        Elements are aligned to the side facing the cursor, so the magnifier does not
+        jump while the readout width changes with the numbers.
+        """
+        readout_font, hint_font, _ = self._hud_fonts()
+        view = self.sample_grid_size * self.zoom_factor
+        pill_w = HUD_PILL_PAD_X * 2 + QFontMetrics(readout_font).horizontalAdvance(self.readout_text())
+        hint_w = HUD_HINT_PAD_X * 2 + QFontMetrics(hint_font).horizontalAdvance(HUD_HINT_TEXT)
+        group_w = max(view, pill_w, hint_w)
+        group_h = view + HUD_GAP + HUD_PILL_HEIGHT + HUD_HINT_GAP + HUD_HINT_HEIGHT
+
+        on_right = cur_x + HUD_OFFSET + group_w + HUD_MARGIN <= screen_w
+        gx = cur_x + HUD_OFFSET if on_right else cur_x - HUD_OFFSET - group_w
+        gy = cur_y + HUD_OFFSET
+        if gy + group_h + HUD_MARGIN > screen_h:
+            gy = cur_y - HUD_OFFSET - group_h
+        gx = max(HUD_MARGIN, min(gx, screen_w - HUD_MARGIN - group_w))
+        gy = max(HUD_MARGIN, min(gy, screen_h - HUD_MARGIN - group_h))
+
+        def place(width: int, top: int, height: int) -> QRect:
+            left = gx if on_right else gx + group_w - width
+            return QRect(left, top, width, height)
+
+        mag = place(view, gy, view)
+        pill = place(pill_w, mag.bottom() + 1 + HUD_GAP, HUD_PILL_HEIGHT)
+        hint = place(hint_w, pill.bottom() + 1 + HUD_HINT_GAP, HUD_HINT_HEIGHT)
+        return mag, pill, hint
 
     def _paint_magnifier_and_hud(
         self,
@@ -378,42 +451,32 @@ class CoordinatePickerOverlay(QWidget):
         screen_w: int,
         screen_h: int,
     ) -> None:
-        """Draws the 8x pixel magnifier box and attached metadata HUD."""
-        grid_dim = self.sample_grid_size  # e.g. 15
-        zoom = self.zoom_factor            # e.g. 8
-        view_size = grid_dim * zoom        # e.g. 120px
+        """Draws the pixel magnifier, the coordinate readout pill and the hint line."""
+        mag, pill, hint = self.hud_rects(cur_x, cur_y, screen_w, screen_h)
+        self._paint_magnifier_grid(painter, mag.x(), mag.y(), cur_x, cur_y, self.sample_grid_size, self.zoom_factor)
+        self._paint_hud_text(painter, pill, hint)
 
-        card_padding = 10
-        card_w = view_size + card_padding * 2  # 140px
-        hud_h = 75
-        card_h = view_size + card_padding * 2 + hud_h  # ~215px
+    def _magnifier_cell_color(self, px: int, py: int, row: int, col: int) -> QColor:
+        """Returns the colour of physical pixel (px, py) for the magnifier cell (row, col)."""
+        col_val = theme.qcolor(theme.COLORS.bg)  # outside the captured screen
+        if self._desktop_snapshot is not None:
+            if 0 <= px < self._desktop_snapshot.width() and 0 <= py < self._desktop_snapshot.height():
+                col_val = self._desktop_snapshot.pixelColor(px, py)
+        elif self.screen_adapter and hasattr(self.screen_adapter, "get_pixel"):
+            try:
+                r, g, b = self.screen_adapter.get_pixel(px, py)
+                col_val = QColor(r, g, b)
+            except Exception:
+                col_val = self._placeholder_cell_color(row, col)
+        else:
+            col_val = self._placeholder_cell_color(row, col)
+        return col_val
 
-        offset_x, offset_y = 25, 25
-        box_x = cur_x + offset_x
-        box_y = cur_y + offset_y
-
-        # Dynamic boundary edge flipping
-        if box_x + card_w + 10 > screen_w:
-            box_x = cur_x - offset_x - card_w
-        if box_y + card_h + 10 > screen_h:
-            box_y = cur_y - offset_y - card_h
-
-        box_x = max(10, min(box_x, max(10, screen_w - card_w - 10)))
-        box_y = max(10, min(box_y, max(10, screen_h - card_h - 10)))
-
-        # Card Container (Dark Slate #0F172A with Cyan Border #38BDF8)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor(56, 189, 248, 220), 1.5))
-        painter.setBrush(QBrush(QColor(15, 23, 42, 230)))
-        painter.drawRoundedRect(QRectF(box_x, box_y, card_w, card_h), 8.0, 8.0)
-
-        # Magnifier Viewport Grid
-        view_x = box_x + card_padding
-        view_y = box_y + card_padding
-        self._paint_magnifier_grid(painter, view_x, view_y, cur_x, cur_y, grid_dim, zoom)
-
-        # HUD Metadata Section
-        self._paint_hud_text(painter, box_x + card_padding, view_y + view_size + 12, card_w - card_padding * 2)
+    @staticmethod
+    def _placeholder_cell_color(row: int, col: int) -> QColor:
+        """Checkerboard shown when no pixels can be sampled."""
+        token = theme.COLORS.surface_3 if (row + col) % 2 == 0 else theme.COLORS.border_strong
+        return theme.qcolor(token)
 
     def _paint_magnifier_grid(
         self,
@@ -425,88 +488,117 @@ class CoordinatePickerOverlay(QWidget):
         grid_dim: int,
         zoom: int,
     ) -> None:
-        """Renders the magnified pixel grid with center target highlight."""
+        """Renders the magnifier: zoomed pixels in a rounded square, pixel grid, centre marker."""
         radius = grid_dim // 2
         dpr = self.target_screen.devicePixelRatio() if self.target_screen else 1.0
         phys_cx, phys_cy = CoordinateTransformer.logical_to_physical(cur_x, cur_y, dpr)
 
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-
+        # One image pixel per sampled physical pixel, then a nearest-neighbour zoom
+        samples = QImage(grid_dim, grid_dim, QImage.Format.Format_RGB32)
         for row in range(grid_dim):
             for col in range(grid_dim):
                 px = phys_cx - radius + col
                 py = phys_cy - radius + row
+                samples.setPixelColor(col, row, self._magnifier_cell_color(px, py, row, col))
 
-                col_val = QColor(0, 0, 0)
-                if self._desktop_snapshot is not None:
-                    if 0 <= px < self._desktop_snapshot.width() and 0 <= py < self._desktop_snapshot.height():
-                        col_val = self._desktop_snapshot.pixelColor(px, py)
-                elif self.screen_adapter and hasattr(self.screen_adapter, "get_pixel"):
-                    try:
-                        r, g, b = self.screen_adapter.get_pixel(px, py)
-                        col_val = QColor(r, g, b)
-                    except Exception:
-                        col_val = QColor(80, 80, 80) if (row + col) % 2 == 0 else QColor(110, 110, 110)
-                else:
-                    col_val = QColor(80, 80, 80) if (row + col) % 2 == 0 else QColor(110, 110, 110)
+        view = grid_dim * zoom
+        zoomed = samples.scaled(view, view, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                Qt.TransformationMode.FastTransformation)
 
-                cell_x = view_x + col * zoom
-                cell_y = view_y + row * zoom
-                painter.fillRect(QRectF(cell_x, cell_y, zoom, zoom), col_val)
+        grid = QPainter(zoomed)
+        grid.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        # Pixel grid
+        grid.setPen(QPen(theme.qcolor(theme.COLORS.bg, MAGNIFIER_GRID_OPACITY), 1))
+        for i in range(1, grid_dim):
+            grid.drawLine(i * zoom, 0, i * zoom, view)
+            grid.drawLine(0, i * zoom, view, i * zoom)
+        # Centre pixel marker: a light ring on the cell edges with a dark outline around it,
+        # visible on any pixel colour
+        center = radius * zoom
+        grid.setBrush(Qt.BrushStyle.NoBrush)
+        grid.setPen(QPen(theme.qcolor(theme.COLORS.bg), 1))
+        grid.drawRect(center - 1, center - 1, zoom + 2, zoom + 2)
+        grid.setPen(QPen(theme.qcolor(theme.COLORS.on_accent), 1))
+        grid.drawRect(center, center, zoom, zoom)
+        grid.end()
 
-                # Subtle grid line
-                painter.setPen(QPen(QColor(0, 0, 0, 40), 0.5))
-                painter.drawRect(QRectF(cell_x, cell_y, zoom, zoom))
+        rect = QRectF(view_x, view_y, view, view)
+        corner = float(theme.RADIUS_MD)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._paint_soft_shadow(painter, rect, corner)
 
-        # Center target pixel reticle highlight (Bright Red #EF4444)
-        center_cell_x = view_x + radius * zoom
-        center_cell_y = view_y + radius * zoom
-        painter.setPen(QPen(QColor(239, 68, 68, 255), 1.5))
+        brush = QBrush(zoomed)
+        brush.setTransform(QTransform.fromTranslate(view_x, view_y))
+        painter.setBrush(brush)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, corner, corner)
+
+        # Colour caption (swatch + hex) along the bottom edge of the magnifier
+        _, _, caption_font = self._hud_fonts()
+        cap_h = MAGNIFIER_CAPTION_HEIGHT
+        frame = QPainterPath()
+        frame.addRoundedRect(rect, corner, corner)
+        strip = QPainterPath()
+        strip.addRect(QRectF(rect.left(), rect.bottom() - cap_h, rect.width(), cap_h))
+        painter.fillPath(frame.intersected(strip), theme.qcolor(theme.COLORS.surface, 0.88))
+
+        r, g, b = self.current_rgb
+        swatch = QRectF(rect.left() + 8, rect.bottom() - cap_h + (cap_h - 8) / 2, 8, 8)
+        painter.setBrush(QColor(r, g, b))
+        painter.setPen(QPen(theme.qcolor(theme.COLORS.text, 0.55), 1))
+        painter.drawRoundedRect(swatch, 2, 2)
+        painter.setFont(caption_font)
+        painter.setPen(theme.qcolor(theme.COLORS.text_muted))
+        text_rect = QRectF(swatch.right() + 6, rect.bottom() - cap_h, rect.width() - 30, cap_h)
+        painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                         f"#{r:02X}{g:02X}{b:02X}")
+
+        # 1px border on top of everything
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(QRectF(center_cell_x - 0.5, center_cell_y - 0.5, zoom + 1, zoom + 1))
+        painter.setPen(QPen(theme.qcolor(theme.COLORS.border_strong), 1))
+        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), corner, corner)
+        painter.restore()
 
-    def _paint_hud_text(
-        self,
-        painter: QPainter,
-        text_x: int,
-        text_y: int,
-        content_w: int,
-    ) -> None:
-        """Renders coordinate labels, RGB/Hex values, color swatch, and user hints."""
+    @staticmethod
+    def _paint_soft_shadow(painter: QPainter, rect: QRectF, corner: float) -> None:
+        """Paints a small, soft drop shadow under ``rect`` (a few translucent rings)."""
+        painter.setPen(Qt.PenStyle.NoPen)
+        for spread, opacity in ((4, 0.10), (3, 0.14), (2, 0.20), (1, 0.30)):
+            painter.setBrush(theme.qcolor(theme.COLORS.bg, opacity))
+            painter.drawRoundedRect(rect.adjusted(-spread, -spread + 1, spread, spread + 1),
+                                    corner + spread, corner + spread)
+
+    def _paint_hud_text(self, painter: QPainter, pill: QRect, hint: QRect) -> None:
+        """Renders the coordinate readout pill (``X 1280   Y 720``) and the hint line."""
+        readout_font, hint_font, _ = self._hud_fonts()
+        painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        # 1. Coordinates: X: {x}   Y: {y}
-        font = QFont("Monospace", 9)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(248, 250, 252))
-        painter.drawText(
-            text_x,
-            text_y + 10,
-            f"X: {self.current_global_x}   Y: {self.current_global_y}",
-        )
+        # Readout pill
+        pill_rect = QRectF(pill)
+        self._paint_soft_shadow(painter, pill_rect, float(theme.RADIUS_MD))
+        painter.setBrush(theme.qcolor(theme.COLORS.surface))
+        painter.setPen(QPen(theme.qcolor(theme.COLORS.border_strong), 1))
+        painter.drawRoundedRect(pill_rect.adjusted(0.5, 0.5, -0.5, -0.5), theme.RADIUS_MD, theme.RADIUS_MD)
 
-        # 2. Color Swatch and Hex / RGB
-        r, g, b = self.current_rgb
-        hex_str = f"#{r:02X}{g:02X}{b:02X}"
+        painter.setFont(readout_font)
+        fm = QFontMetrics(readout_font)
+        x = pill.left() + HUD_PILL_PAD_X
+        baseline = pill.top() + (pill.height() - fm.height()) // 2 + fm.ascent()
+        for text, is_label in self._readout_parts():
+            painter.setPen(theme.qcolor(theme.COLORS.text_muted if is_label else theme.COLORS.text))
+            painter.drawText(x, baseline, text)
+            x += fm.horizontalAdvance(text)
 
-        # Swatch rect
-        swatch_size = 14
-        swatch_y = text_y + 18
-        painter.fillRect(QRectF(text_x, swatch_y, swatch_size, swatch_size), QColor(r, g, b))
-        painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-        painter.drawRect(QRectF(text_x, swatch_y, swatch_size, swatch_size))
-
-        font_sm = QFont("Monospace", 8)
-        painter.setFont(font_sm)
-        painter.setPen(QColor(226, 232, 240))
-        painter.drawText(text_x + swatch_size + 8, swatch_y + 11, f"{hex_str}")
-
-        # 3. Action Hint
-        font_hint = QFont("Sans-Serif", 7)
-        painter.setFont(font_hint)
-        painter.setPen(QColor(148, 163, 184))
-        painter.drawText(text_x, swatch_y + 26, "Click: Pick | ESC: Cancel")
+        # Hint line on a translucent chip, legible over any screen content
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.qcolor(theme.COLORS.bg, 0.82))
+        painter.drawRoundedRect(QRectF(hint), theme.RADIUS_SM, theme.RADIUS_SM)
+        painter.setFont(hint_font)
+        painter.setPen(theme.qcolor(theme.COLORS.text_muted))
+        painter.drawText(QRectF(hint), int(Qt.AlignmentFlag.AlignCenter), HUD_HINT_TEXT)
+        painter.restore()
 
     # -------------------------------------------------------------------------
     # Programmatic Headless Simulation API (For Automated CI Testing)

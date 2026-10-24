@@ -687,9 +687,7 @@ class TestIntegratedBuilderAndInspectorStress:
         inspector.form_mouse.spin_clicks.setValue(2)
 
         card = builder._card_map[act.id]
-        assert "1234" in card.lbl_summary.text()
-        assert "5678" in card.lbl_summary.text()
-        assert "Clicks: 2" in card.lbl_summary.text()
+        assert card.lbl_summary.text() == "Double-click left at (1234, 5678)"
 
     def test_edit_fixed_wait_and_verify_card_summary_sync(self, qtbot):
         """Mutate fixed wait duration in inspector and verify card summary updates dynamically."""
@@ -707,8 +705,7 @@ class TestIntegratedBuilderAndInspectorStress:
         inspector.form_wait.spin_duration.setValue(3500)
 
         card = builder._card_map[act.id]
-        assert "3.50 s" in card.lbl_summary.text()
-        assert "3500 ms" in card.lbl_summary.text()
+        assert card.lbl_summary.text() == "Wait 3.5 s"
 
     def test_delete_inspected_card_under_active_modification(self, qtbot):
         """

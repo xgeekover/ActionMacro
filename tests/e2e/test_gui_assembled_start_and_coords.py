@@ -8,8 +8,10 @@ screen capture.
 
 Covers two defects that were invisible to tests injecting mock drivers:
 
-1. Every "Start" entry point (Run menu, toolbar, F5 shortcut) must honour the
-   dashboard Repeat Count exactly like the dashboard ``Start`` button.
+1. Every "Start" entry point (Run menu, the run bar's Run button, F5 shortcut)
+   must honour the dashboard Repeat Count exactly like the dashboard ``Start``
+   button. (The old text toolbar that duplicated the menu was removed in the UI
+   redesign; its on-screen Start entry is now the Run button of the run bar.)
    ``QAction.triggered`` delivers ``checked=False``; it used to reach
    ``start_macro(loop_count)`` as ``loop_count=False`` and run forever.
 2. Negative global coordinates (monitors placed left of / above the primary
@@ -30,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, QRect, Qt
-from PySide6.QtGui import QGuiApplication, QKeySequence, QMouseEvent
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton, QToolBar
 
@@ -185,22 +187,30 @@ def make_window(qtbot, os_boundary: OsBoundaryRecorder):
 # Helpers driving the real widgets
 # -----------------------------------------------------------------------------
 
-def _builder_button(win: MainWindow, label: str) -> QPushButton:
-    for btn in win.scenario_builder.findChildren(QPushButton):
-        if btn.text() == label:
-            return btn
-    raise AssertionError(f"ScenarioBuilder button {label!r} not found")
+def _builder_add_step(win: MainWindow, label: str) -> QAction:
+    """The entry ``label`` of the step list's "+ Add step" menu (what the user picks there).
+
+    The four "+ <type>" toolbar buttons were replaced by this menu in the UI redesign;
+    triggering the entry runs the same ``add_action_block`` path the buttons did.
+    """
+    builder = win.scenario_builder
+    for action in builder.add_step_menu.actions():
+        if action.text() == label:
+            assert action.isEnabled() and action.isVisible()
+            assert action in builder.add_step_actions.values()
+            return action
+    raise AssertionError(f"ScenarioBuilder add-step menu entry {label!r} not found")
 
 
 def _compose_click_and_wait(win: MainWindow, x: int, y: int) -> ActionBlock:
     """Builds [Mouse Click(x, y), Fixed Wait(10ms)] through builder + inspector widgets."""
-    _builder_button(win, "+ Mouse Click").click()
+    _builder_add_step(win, "Mouse click").trigger()
     click = win.scenario.actions[-1]
     assert win.property_inspector.current_action is click
     win.property_inspector.form_mouse.spin_x.setValue(x)
     win.property_inspector.form_mouse.spin_y.setValue(y)
 
-    _builder_button(win, "+ Fixed Wait").click()
+    _builder_add_step(win, "Wait").trigger()
     wait = win.scenario.actions[-1]
     assert win.property_inspector.current_action is wait
     win.property_inspector.form_wait.spin_duration.setValue(10)
@@ -224,12 +234,17 @@ def _start_via(win: MainWindow, qtbot, entry: str) -> None:
         win.dashboard.btn_start.click()
     elif entry == "run_menu":
         _menu_action(win, "&Run", "&Start Execution").trigger()
-    elif entry == "toolbar":
-        toolbar = win.findChild(QToolBar)
-        assert toolbar is not None
-        tool_button = toolbar.widgetForAction(win.act_run)
-        assert tool_button is not None
-        tool_button.click()
+    elif entry == "run_bar":
+        # The redesign replaced the text toolbar (it duplicated the menu) with the
+        # editor run bar. Click its Run button the way a user does: located in the
+        # shown window by object name and clicked through a synthetic Qt mouse event.
+        assert win.findChild(QToolBar) is None, "the duplicate text toolbar should be gone"
+        run_button = win.findChild(QPushButton, "RunButton")
+        assert run_button is not None and run_button is win.dashboard.btn_start
+        win.show()
+        qtbot.waitExposed(win)
+        assert run_button.isVisible() and run_button.isEnabled()
+        QTest.mouseClick(run_button, Qt.MouseButton.LeftButton)
     elif entry == "f5_shortcut":
         assert win.act_run.shortcut() == QKeySequence("F5")
         win.show()
@@ -276,11 +291,11 @@ def _run_outcome(win: MainWindow, recorder: OsBoundaryRecorder, qtbot) -> Dict[s
 # 1. Start entry points honour Repeat Count
 # -----------------------------------------------------------------------------
 
-@pytest.mark.parametrize("entry", ["run_menu", "toolbar", "f5_shortcut"])
+@pytest.mark.parametrize("entry", ["run_menu", "run_bar", "f5_shortcut"])
 def test_start_entry_points_honour_repeat_count_like_dashboard(
     entry: str, make_window, os_boundary: OsBoundaryRecorder, qtbot
 ) -> None:
-    """Repeat Count=1 via menu/toolbar/F5 must run exactly one iteration, like ▶ Start."""
+    """Repeat Count=1 via menu/run bar/F5 must run exactly one iteration, like the Start button."""
     # Baseline: dashboard ▶ Start button (start_requested(int) path).
     base_win = make_window()
     _compose_click_and_wait(base_win, 640, 360)
@@ -372,7 +387,7 @@ def test_negative_picker_coordinate_reaches_engine_click(
     monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, left_top]))
 
     win = make_window()
-    _builder_button(win, "+ Mouse Click").click()
+    _builder_add_step(win, "Mouse click").trigger()
     click = win.scenario.actions[-1]
     assert win.property_inspector.current_action is click
 
@@ -401,7 +416,7 @@ def test_negative_picker_coordinate_reaches_engine_click(
     assert (click.params.x, click.params.y) == (-1200, -300)
 
     # Re-open the block in the inspector and edit an unrelated field: still negative.
-    _builder_button(win, "+ Fixed Wait").click()
+    _builder_add_step(win, "Wait").trigger()
     win.property_inspector.form_wait.spin_duration.setValue(10)
     win.scenario_builder.select_action(click.id)
     assert win.property_inspector.current_action is click
@@ -524,7 +539,7 @@ def test_open_action_shows_file_dialog_instead_of_using_checked_flag(
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(_fake_get_open_file_name))
 
     win = make_window()
-    _menu_action(win, "&File", "&Open Scenario...").trigger()
+    _menu_action(win, "&File", "&Open Scenario…").trigger()  # U+2026, like every other "…" in the UI
 
     assert len(dialog_calls) == 1
     assert win.current_file_path == src.resolve()

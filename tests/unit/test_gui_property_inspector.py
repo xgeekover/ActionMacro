@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage
 
 from action_macro.core.models import (
     ActionBlock,
@@ -121,14 +122,15 @@ def test_fixed_wait_form_sync_and_presets(qtbot):
     assert inspector.stacked_widget.currentWidget() is inspector.form_wait
     assert inspector.form_wait.spin_duration.value() == 1000
     assert inspector.form_wait.slider.value() == 1000
-    assert "1.00 seconds" in inspector.form_wait.lbl_human.text()
+    # The readout uses the step card's wording ("1.0 s"), exact match.
+    assert inspector.form_wait.lbl_human.text() == "1.0 s"
 
     # Changing spinbox updates slider and label
     with qtbot.waitSignal(inspector.action_modified):
         inspector.form_wait.spin_duration.setValue(2500)
     assert act.params.duration_ms == 2500
     assert inspector.form_wait.slider.value() == 2500
-    assert "2.50 seconds" in inspector.form_wait.lbl_human.text()
+    assert inspector.form_wait.lbl_human.text() == "2.5 s"
 
     # Changing slider updates spinbox
     with qtbot.waitSignal(inspector.action_modified):
@@ -137,7 +139,7 @@ def test_fixed_wait_form_sync_and_presets(qtbot):
     assert inspector.form_wait.spin_duration.value() == 500
 
 
-def test_image_wait_form_editing_validation_and_roi(qtbot):
+def test_image_wait_form_editing_validation_and_roi(qtbot, tmp_path):
     inspector = PropertyInspector()
     qtbot.addWidget(inspector)
 
@@ -164,11 +166,23 @@ def test_image_wait_form_editing_validation_and_roi(qtbot):
     assert "⚠" in inspector.lbl_status.text()
     assert act.params.template_path != ""
 
-    # Restore valid path
+    # Restore a valid path. The file does not exist (relative to the working folder),
+    # so the path is committed but the status line warns that a run would fail; it no
+    # longer claims "✓ Parameters valid" next to the card's "Image not found".
     with qtbot.waitSignal(inspector.action_modified):
         inspector.form_image.edit_path.setText("templates/new_target.png")
     assert act.params.template_path == "templates/new_target.png"
+    assert inspector.lbl_status.text().startswith("⚠ Image file not found")
+    assert inspector.lbl_status.property("state") == "warning"
+
+    # An existing image file gives the green check.
+    image_file = tmp_path / "new_target.png"
+    QImage(8, 8, QImage.Format.Format_ARGB32).save(str(image_file))
+    with qtbot.waitSignal(inspector.action_modified):
+        inspector.form_image.edit_path.setText(str(image_file))
+    assert act.params.template_path == str(image_file)
     assert "✓" in inspector.lbl_status.text()
+    assert inspector.lbl_status.property("state") == "valid"
 
     # Enable ROI
     with qtbot.waitSignal(inspector.action_modified):

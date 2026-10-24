@@ -20,6 +20,21 @@ if str(SRC_DIR) not in sys.path:
 # Ensure headless Qt operation in test runs
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# Isolate QSettings: the GUI remembers recent scenario files in user-scope INI
+# settings (organisation "ActionMacro"). Redirect that scope to a throw-away
+# directory before any QSettings object exists so tests never read or write the
+# developer's real settings.
+import atexit as _atexit
+import shutil as _shutil
+import tempfile as _tempfile
+
+from PySide6.QtCore import QSettings as _QSettings
+
+_QSETTINGS_DIR = _tempfile.mkdtemp(prefix="actionmacro-test-settings-")
+for _scope in (_QSettings.Scope.UserScope, _QSettings.Scope.SystemScope):
+    _QSettings.setPath(_QSettings.Format.IniFormat, _scope, _QSETTINGS_DIR)
+_atexit.register(_shutil.rmtree, _QSETTINGS_DIR, True)
+
 from tests.mocks.contract import (
     ActionBlock,
     ActionType,
@@ -36,6 +51,66 @@ from tests.mocks.contract import (
 )
 from tests.mocks.mock_input import InputEvent, MockInputDriver
 from tests.mocks.mock_screen import MockScreenDriver
+
+
+#: Real permission bindings a test tried to call (they never reach the host; see below).
+_BLOCKED_PERMISSION_QUERIES: list = []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _macos_permissions_guard():
+    """Session-wide: no test ever queries this machine's real macOS permission state.
+
+    * ``default_checker`` reports everything granted from the first fixture on, so
+      a module- or session-scoped fixture that builds a MainWindow before the
+      function-scoped fake below runs still never asks the host.
+    * The three low-level bindings (AXIsProcessTrusted, CGPreflightScreenCaptureAccess,
+      IOHIDCheckAccess) are replaced by guards that record the call and raise, so the
+      check reports UNKNOWN instead of reading the host. A test that injects its own
+      bindings (monkeypatch or the ``is_trusted=`` / ``preflight=`` arguments) is not
+      affected; any recorded call fails the test that made it (see the fixture below).
+    """
+    from action_macro.engine import macos_permissions
+
+    def _guard(name: str):
+        def _blocked(*_args, **_kwargs):
+            _BLOCKED_PERMISSION_QUERIES.append(name)
+            raise RuntimeError(f"tests must not query the real macOS permission binding {name}")
+
+        _blocked._test_guard = True  # type: ignore[attr-defined]
+        _blocked.__name__ = f"_blocked_{name.lstrip('_')}"
+        return _blocked
+
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(macos_permissions, "default_checker", macos_permissions.all_granted)
+    for name in ("_ax_is_process_trusted", "_cg_preflight_screen_capture_access", "_iohid_check_access"):
+        patcher.setattr(macos_permissions, name, _guard(name))
+    yield
+    patcher.undo()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_permission_queries():
+    """Fails the test that reached a real permission binding (recorded by the guard above)."""
+    _BLOCKED_PERMISSION_QUERIES.clear()
+    yield
+    calls = list(_BLOCKED_PERMISSION_QUERIES)
+    _BLOCKED_PERMISSION_QUERIES.clear()
+    assert not calls, f"real macOS permission bindings were called: {calls}"
+
+
+@pytest.fixture(autouse=True)
+def _macos_permissions_all_granted(monkeypatch):
+    """Makes the default macOS permission checker report every permission as granted.
+
+    MainWindow checks Accessibility / Input Monitoring / Screen Recording at startup
+    and when the app becomes active; with the real (passive) checker the top-bar
+    warning would depend on the machine running the tests. Tests that need other
+    statuses inject ``MainWindow(permission_checker=...)`` (see test_gui_p2_perms.py).
+    """
+    from action_macro.engine import macos_permissions
+
+    monkeypatch.setattr(macos_permissions, "default_checker", macos_permissions.all_granted)
 
 
 @pytest.fixture
@@ -104,3 +179,12 @@ def sample_scenario(sample_template_file: Path) -> ScenarioModel:
             ),
         ],
     )
+
+
+@pytest.fixture
+def isolated_settings(tmp_path: Path) -> _QSettings:
+    """Provides a QSettings object backed by a private INI file under tmp_path."""
+    settings = _QSettings(str(tmp_path / "ActionMacro-test.ini"), _QSettings.Format.IniFormat)
+    yield settings
+    settings.clear()
+    settings.sync()

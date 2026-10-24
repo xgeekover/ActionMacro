@@ -6,6 +6,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from action_macro.gui import theme
 from action_macro.gui.dashboard import ExecutionDashboard
 from action_macro.gui.log_console import LogConsole, LogEntry
 from action_macro.runner.state_machine import EngineState
@@ -27,7 +28,11 @@ def test_log_entry_formatting():
     assert "Test message <with markup>" in plain
 
     html_str = entry.to_formatted_html()
-    assert "#4A90E2" in html_str
+    # Since the redesign the INFO tag uses the theme's info token (#38BDF8, see
+    # theme.COLORS.info) instead of the old ad-hoc blue #4A90E2.
+    assert "#38BDF8" in html_str
+    assert theme.COLORS.info in html_str
+    assert "#4A90E2" not in html_str
     assert "&lt;with markup&gt;" in html_str
 
 
@@ -131,10 +136,13 @@ def test_dashboard_state_transitions(qtbot):
     qtbot.addWidget(dash)
 
     # Transition to RUNNING
+    # (Button labels carry no emoji glyphs since the redesign; the play/pause
+    # glyph is a Lucide icon set on the button, so the label is the plain word.)
     dash.set_state("RUNNING")
     assert not dash.btn_start.isEnabled()
     assert dash.btn_pause.isEnabled()
-    assert dash.btn_pause.text() == "⏸ Pause"
+    assert dash.btn_pause.text() == "Pause"
+    assert not dash.btn_pause.icon().isNull()
     assert dash.btn_stop.isEnabled()
     assert not dash.spin_loops.isEnabled()
     assert not dash.cb_infinite.isEnabled()
@@ -143,7 +151,8 @@ def test_dashboard_state_transitions(qtbot):
     dash.set_state("PAUSED")
     assert not dash.btn_start.isEnabled()
     assert dash.btn_pause.isEnabled()
-    assert dash.btn_pause.text() == "▶ Resume"
+    assert dash.btn_pause.text() == "Resume"
+    assert not dash.btn_pause.icon().isNull()
     assert dash.btn_stop.isEnabled()
 
     # Transition to STOPPING
