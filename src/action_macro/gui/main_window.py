@@ -141,7 +141,10 @@ class MainWindow(QMainWindow):
 
         self.act_open = QAction("&Open Scenario...", self)
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
-        self.act_open.triggered.connect(self.open_scenario)
+        # Not open_scenario directly: QAction.triggered(bool checked) would land in
+        # ``file_path``. A bound no-argument slot (not a lambda capturing self)
+        # also avoids a reference cycle that would keep the window alive.
+        self.act_open.triggered.connect(self._on_open_action_triggered)
         file_menu.addAction(self.act_open)
 
         self.act_save = QAction("&Save Scenario", self)
@@ -166,7 +169,11 @@ class MainWindow(QMainWindow):
 
         self.act_run = QAction("&Start Execution", self)
         self.act_run.setShortcut(QKeySequence("F5"))
-        self.act_run.triggered.connect(self.start_macro)
+        self.act_run.setToolTip("Start execution using the dashboard Repeat Count (F5)")
+        # Not start_macro directly: QAction.triggered(bool checked) would land in
+        # ``loop_count`` (False -> infinite loop). The no-argument slot starts with
+        # the dashboard Repeat Count, exactly like the dashboard Start button.
+        self.act_run.triggered.connect(self._on_run_action_triggered)
         run_menu.addAction(self.act_run)
 
         self.act_pause = QAction("&Pause / Resume", self)
@@ -295,6 +302,11 @@ class MainWindow(QMainWindow):
         self.mark_dirty(False)
         self.log_console.append_log("INFO", "Created new blank scenario")
         self.status_bar.showMessage("New scenario created", 3000)
+
+    @Slot()
+    def _on_open_action_triggered(self) -> None:
+        """File > Open / toolbar handler; drops QAction's ``checked`` argument."""
+        self.open_scenario()
 
     @Slot()
     def open_scenario(self, file_path: Optional[str] = None) -> bool:
@@ -427,8 +439,28 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------------------
 
     @Slot()
+    def _on_run_action_triggered(self) -> None:
+        """Run menu / toolbar / F5 handler; uses the dashboard Repeat Count.
+
+        QAction.triggered carries ``checked`` (False for a non-checkable action).
+        Passing it on as ``loop_count`` would mean 0 = infinite, so it is dropped.
+        """
+        self.start_macro()
+
+    @Slot()
     def start_macro(self, loop_count: Optional[int] = None) -> None:
-        """Starts macro execution in a background worker thread."""
+        """Starts macro execution in a background worker thread.
+
+        Args:
+            loop_count: Explicit repeat count (0 = infinite). ``None`` uses the
+                dashboard Repeat Count. A ``bool`` (the ``checked`` argument of
+                ``QAction.triggered`` / ``QAbstractButton.clicked``) or a negative
+                value is not a repeat count and is treated as ``None``.
+        """
+        # bool is a subclass of int, so it must be rejected before the int check.
+        if isinstance(loop_count, bool) or not isinstance(loop_count, int) or loop_count < 0:
+            loop_count = None
+
         worker_alive = (
             self._worker_thread is not None
             and hasattr(self._worker_thread, "is_alive")

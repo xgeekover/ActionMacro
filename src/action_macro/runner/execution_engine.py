@@ -14,6 +14,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from action_macro.core.key_mapping import build_key_chord
 from action_macro.core.models import (
     ActionBlock,
     ActionType,
@@ -24,6 +25,7 @@ from action_macro.engine.wait_system import WaitSystem
 from action_macro.runner.state_machine import EngineState, StateMachine
 
 logger = logging.getLogger(__name__)
+
 
 # Check PySide6 availability for Qt signal integration
 try:
@@ -200,6 +202,8 @@ class ExecutionEngine:
         self.scenario = scenario
         self.input_driver = input_driver
         self.screen_driver = screen_driver
+        # True while self.screen_driver is an adapter this engine created (and must close).
+        self._owns_screen_driver = False
         self.base_dir = Path(base_dir).resolve() if base_dir else None
 
         # Inter-action and inter-loop delays
@@ -356,6 +360,17 @@ class ExecutionEngine:
             self.cancel_event.clear()
             self.pause_event.clear()
 
+            # Build the OS input driver here, on the calling thread, before the worker
+            # starts. On macOS pynput's keyboard controller reads the keyboard layout via
+            # TSMGetInputSourceProperty, which HIToolbox only allows on the main thread
+            # once the app has a window: constructing it in the worker killed the GUI
+            # with SIGTRAP on the first click or key step.
+            if self._scenario_uses_input():
+                try:
+                    self._ensure_input_driver()
+                except Exception as err:
+                    logger.warning("Could not prepare the input driver before starting: %s", err)
+
             def _thread_target() -> None:
                 try:
                     res = self.run()
@@ -414,6 +429,12 @@ class ExecutionEngine:
 
         loop = 0
         try:
+            # Open the screen capture connection on this (worker) thread before the first
+            # action, so platform setup done by mss (e.g. Windows DPI awareness) is in
+            # place for every action of the run, not only for those after the first wait.
+            if self.screen_driver is None and self._scenario_uses_image_wait():
+                self._ensure_screen_driver()
+
             while True:
                 if self.cancel_event.is_set():
                     break
@@ -482,6 +503,8 @@ class ExecutionEngine:
             self._safe_flush_inputs()
             self.signals.emit_finished(False, f"Error: {err}")
             raise
+        finally:
+            self._release_owned_screen_driver()
 
         was_cancelled = self.cancel_event.is_set()
         self._safe_flush_inputs()
@@ -530,9 +553,7 @@ class ExecutionEngine:
             else:
                 press_duration_sec = float(p.get("press_duration", 0.05))
 
-            if self.input_driver is None:
-                from action_macro.engine.input_adapter import PynputAdapter
-                self.input_driver = PynputAdapter()
+            self._ensure_input_driver()
 
             self.input_driver.click(
                 x=x,
@@ -541,6 +562,7 @@ class ExecutionEngine:
                 count=clicks,
                 interval_ms=interval_ms,
                 press_duration=press_duration_sec,
+                cancel_event=self.cancel_event,
             )
             return True
 
@@ -557,28 +579,41 @@ class ExecutionEngine:
             else:
                 duration_sec = float(p.get("duration", 0.05))
 
-            if self.input_driver is None:
-                from action_macro.engine.input_adapter import PynputAdapter
-                self.input_driver = PynputAdapter()
+            self._ensure_input_driver()
+
+            # Explicit modifiers first, then keys, in the order given. Together they
+            # form one chord (e.g. "cmd_or_ctrl+shift+t" -> ["cmd_or_ctrl", "shift", "t"]).
+            chord = build_key_chord(modifiers, keys)
 
             if act == "press":
-                for k in keys:
-                    self.input_driver.press_key(k, modifiers=modifiers, duration=duration_sec)
+                # Leading keys stay held in order, the last key is held for the press
+                # duration, then all are released in reverse order (the driver
+                # guarantees the release even on error or cancellation).
+                if chord:
+                    self.input_driver.press_key(
+                        chord[-1],
+                        modifiers=chord[:-1] or None,
+                        duration=duration_sec,
+                        cancel_event=self.cancel_event,
+                    )
             elif act == "down":
-                for k in keys:
+                for k in chord:
+                    if self.cancel_event.is_set():
+                        break
                     self.input_driver.key_down(k)
             elif act == "up":
-                for k in keys:
+                # Releasing is always safe, so it is not skipped on cancellation.
+                for k in reversed(chord):
                     if hasattr(self.input_driver, "key_up"):
                         self.input_driver.key_up(k)
                     elif hasattr(self.input_driver, "release_key"):
                         self.input_driver.release_key(k)
             elif act == "hotkey":
-                self.input_driver.hotkey(*keys)
+                self.input_driver.hotkey(*chord, cancel_event=self.cancel_event)
             elif act == "type":
                 text = p.get("text", "")
                 if hasattr(self.input_driver, "type_text"):
-                    self.input_driver.type_text(text)
+                    self.input_driver.type_text(text, cancel_event=self.cancel_event)
             return True
 
         elif act_type == ActionType.FIXED_WAIT:
@@ -587,8 +622,7 @@ class ExecutionEngine:
             return WaitSystem.wait(duration_s, cancel_event=self.cancel_event, pause_event=self.pause_event)
 
         elif act_type == ActionType.IMAGE_WAIT:
-            if not self.screen_driver:
-                raise ValueError("Screen driver required for ImageWait action")
+            screen_driver = self._ensure_screen_driver()
 
             iwp = ImageWaitParams(
                 template_path=p.get("template_path", ""),
@@ -600,7 +634,7 @@ class ExecutionEngine:
                 poll_interval_seconds=p.get("poll_interval_seconds", 0.05),
             )
             matched, coords = WaitSystem.wait_image(
-                self.screen_driver,
+                screen_driver,
                 iwp,
                 cancel_event=self.cancel_event,
                 base_dir=self.base_dir,
@@ -611,6 +645,85 @@ class ExecutionEngine:
             return matched
 
         return False
+
+    # -------------------------------------------------------------------------
+    # Input Driver Lifecycle
+    # -------------------------------------------------------------------------
+
+    def _scenario_uses_input(self) -> bool:
+        """Returns True if any enabled action of the scenario clicks or types."""
+        for action in self.scenario.actions:
+            if not getattr(action, "enabled", True):
+                continue
+            try:
+                act_type = action.type if isinstance(action.type, ActionType) else ActionType(action.type)
+            except ValueError:
+                continue
+            if act_type in (ActionType.MOUSE_CLICK, ActionType.KEY_INPUT):
+                return True
+        return False
+
+    def _ensure_input_driver(self) -> Any:
+        """Returns the input driver, creating a PynputAdapter if none was injected.
+
+        ``start_async`` calls this on the caller's thread so the adapter is never
+        first built inside the worker (see the macOS note there). ``run()`` called
+        synchronously, as the headless CLI does, builds it on the calling thread too.
+        """
+        if self.input_driver is None:
+            from action_macro.engine.input_adapter import PynputAdapter
+            from action_macro.engine.macos_keyboard import refresh_keyboard_layout_cache
+
+            refresh_keyboard_layout_cache()
+            self.input_driver = PynputAdapter()
+        return self.input_driver
+
+    # -------------------------------------------------------------------------
+    # Screen Driver Lifecycle
+    # -------------------------------------------------------------------------
+
+    def _scenario_uses_image_wait(self) -> bool:
+        """Returns True if any enabled action of the scenario is an IMAGE_WAIT."""
+        for action in self.scenario.actions:
+            if not getattr(action, "enabled", True):
+                continue
+            try:
+                act_type = action.type if isinstance(action.type, ActionType) else ActionType(action.type)
+            except ValueError:
+                continue
+            if act_type == ActionType.IMAGE_WAIT:
+                return True
+        return False
+
+    def _ensure_screen_driver(self) -> Any:
+        """Returns the screen driver, creating an engine-owned MSSScreenAdapter if none was injected.
+
+        Called from the thread executing the scenario: MSS keeps per-thread platform
+        resources (Windows device contexts, X11 connections), so the connection is
+        opened here and closed by ``_release_owned_screen_driver`` on the same thread
+        when ``run()`` ends. Injected drivers are used as-is and never closed.
+        """
+        if self.screen_driver is None:
+            from action_macro.engine.screen_adapter import MSSScreenAdapter
+
+            adapter = MSSScreenAdapter()
+            self.screen_driver = adapter
+            self._owns_screen_driver = True
+            adapter.open()
+        return self.screen_driver
+
+    def _release_owned_screen_driver(self) -> None:
+        """Closes and forgets the screen driver if this engine created it."""
+        if not self._owns_screen_driver:
+            return
+        driver = self.screen_driver
+        self.screen_driver = None
+        self._owns_screen_driver = False
+        if driver is not None and hasattr(driver, "close"):
+            try:
+                driver.close()
+            except Exception as err:
+                logger.warning("Error closing screen driver: %s", err)
 
     def _safe_flush_inputs(self) -> None:
         """Releases all active mouse and keyboard hold states safely."""

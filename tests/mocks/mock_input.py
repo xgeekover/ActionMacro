@@ -6,6 +6,7 @@ active hold tracking, and safety flush verification.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
@@ -67,8 +68,15 @@ class MockInputDriver:
         count: int = 1,
         interval_ms: int = 0,
         press_duration: float = 0.05,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Executes mouse click at (x, y) with specified button and count."""
+        """Executes mouse click at (x, y) with specified button and count.
+
+        Mirrors the real adapter contract: nothing is emitted once ``cancel_event``
+        is set (this mock never blocks, so it cannot be interrupted mid-click).
+        """
+        if cancel_event is not None and cancel_event.is_set():
+            return
         self.move_to(x, y)
         self.events.append(InputEvent(
             event_type="click",
@@ -126,8 +134,15 @@ class MockInputDriver:
         key: str,
         modifiers: Optional[List[str]] = None,
         duration: float = 0.05,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Simulates a complete key press (down then up), with optional modifiers."""
+        """Simulates a complete key press (down then up), with optional modifiers.
+
+        Modifiers are held as one chord with ``key`` and released in reverse order.
+        Nothing is emitted once ``cancel_event`` is set.
+        """
+        if cancel_event is not None and cancel_event.is_set():
+            return
         mods = [m.lower() for m in modifiers] if modifiers else []
         for mod in mods:
             self.key_down(mod)
@@ -160,8 +175,13 @@ class MockInputDriver:
         """Alias for key_up conforming to InputAdapterProtocol."""
         self.key_up(key)
 
-    def hotkey(self, *keys: str) -> None:
-        """Dispatches a multi-key shortcut combination in strict order."""
+    def hotkey(self, *keys: str, cancel_event: Optional[threading.Event] = None) -> None:
+        """Dispatches a multi-key shortcut combination in strict order.
+
+        Nothing is emitted once ``cancel_event`` is set.
+        """
+        if cancel_event is not None and cancel_event.is_set():
+            return
         key_list = [k.lower() for k in keys]
         self.events.append(InputEvent(
             event_type="hotkey",
@@ -173,8 +193,18 @@ class MockInputDriver:
         for k in reversed(key_list):
             self.key_up(k)
 
-    def type_text(self, text: str, interval: float = 0.02) -> None:
-        """Types a string of text character by character or via paste simulation."""
+    def type_text(
+        self,
+        text: str,
+        interval: float = 0.02,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Types a string of text character by character or via paste simulation.
+
+        Nothing is emitted once ``cancel_event`` is set.
+        """
+        if cancel_event is not None and cancel_event.is_set():
+            return
         self.events.append(InputEvent(
             event_type="text",
             text=text,

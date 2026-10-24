@@ -31,6 +31,7 @@ from action_macro.core.persistence import (
     scenario_to_json,
 )
 from action_macro.core.key_mapping import (
+    build_key_chord,
     format_key_combo,
     is_valid_key,
     normalize_key_name,
@@ -41,6 +42,7 @@ from action_macro.core.key_mapping import (
 )
 
 __all__ = [
+    "build_key_chord",
     "ActionBlock",
     "ActionType",
     "FixedWaitParams",

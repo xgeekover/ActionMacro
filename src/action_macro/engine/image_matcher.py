@@ -2,14 +2,15 @@
 action_macro.engine.image_matcher
 =====================================
 Grayscale OpenCV template matching engine with flat template fallback,
-ROI offset mapping, and appearance/disappearance presence modes.
+ROI offset mapping, multi-scale matching (HiDPI templates against nominal
+captures), and appearance/disappearance presence modes.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -78,6 +79,21 @@ def load_template_image(
         return to_grayscale(img)
 
     return to_grayscale(template)
+
+
+def scaled_template_size(width: int, height: int, scale: float) -> Tuple[int, int]:
+    """Returns the (width, height) a template of the given size has after scaling."""
+    return (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+
+
+def resize_template(template: np.ndarray, scale: float) -> np.ndarray:
+    """Resizes a template image by ``scale`` (area interpolation when shrinking)."""
+    if scale == 1.0:
+        return template
+    height, width = template.shape[:2]
+    new_size = scaled_template_size(width, height, scale)
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+    return cv2.resize(template, new_size, interpolation=interpolation)
 
 
 class ImageMatcher:
@@ -187,6 +203,92 @@ class ImageMatcher:
         return ((center_x, center_y), score)
 
     @classmethod
+    def match_template_multiscale(
+        cls,
+        haystack: Union[np.ndarray, str, Path],
+        needle: Union[np.ndarray, str, Path],
+        scales: Sequence[float] = (1.0,),
+        roi: Optional[Tuple[int, int, int, int]] = None,
+        verify_color: bool = False,
+    ) -> Tuple[Tuple[int, int], float, float]:
+        """Matches the needle resized by each factor in ``scales`` and keeps the best score.
+
+        Used when the template may have been recorded at a different pixel density than
+        the haystack (e.g. a 2x Retina screenshot against a 1x capture). Scores keep the
+        meaning they have in :meth:`match_template`; on a tie the earlier scale wins.
+
+        Args:
+            haystack: Screen capture array or image path.
+            needle: Template patch array or image path.
+            scales: Resize factors applied to the needle, tried in order.
+            roi: Optional bounding box (x, y, width, height).
+            verify_color: Whether to enforce additional RGB color distance check.
+
+        Returns:
+            Tuple of ((center_x, center_y), confidence_score, matched_scale). Centers are
+            in haystack coordinates (plus the ROI offset), independent of the scale.
+
+        Raises:
+            FileNotFoundError: If needle or haystack image file does not exist.
+            ValueError: If the resized needle fits inside the search area at none of the
+                scales, or the ROI is invalid.
+        """
+        raw_haystack = haystack if isinstance(haystack, np.ndarray) else load_template_image(haystack)
+        raw_needle = needle if isinstance(needle, np.ndarray) else load_template_image(needle)
+        if not verify_color:
+            # Convert once instead of once per scale.
+            raw_haystack = to_grayscale(raw_haystack)
+            raw_needle = to_grayscale(raw_needle)
+
+        templ_h, templ_w = raw_needle.shape[:2]
+        if roi is not None:
+            search_w, search_h = int(roi[2]), int(roi[3])
+        else:
+            search_h, search_w = raw_haystack.shape[:2]
+
+        best: Optional[Tuple[Tuple[int, int], float, float]] = None
+        for scale in scales:
+            scale = float(scale)
+            if scale <= 0.0:
+                continue
+            scaled_w, scaled_h = scaled_template_size(templ_w, templ_h, scale)
+            if scaled_w > search_w or scaled_h > search_h:
+                continue  # this size cannot occur inside the search area
+            center, score = cls.match_template(
+                haystack=raw_haystack,
+                needle=resize_template(raw_needle, scale),
+                roi=roi,
+                verify_color=verify_color,
+            )
+            if best is None or score > best[1]:
+                best = (center, score, scale)
+
+        if best is None:
+            bounds = "ROI bounding box" if roi is not None else "search bounds"
+            raise ValueError(
+                f"Template dimensions ({templ_w}x{templ_h}) exceed {bounds} "
+                f"({search_w}x{search_h}) at every candidate scale {tuple(scales)}"
+            )
+        return best
+
+    @classmethod
+    def _match(
+        cls,
+        haystack: Union[np.ndarray, str, Path],
+        needle: Union[np.ndarray, str, Path],
+        roi: Optional[Tuple[int, int, int, int]],
+        verify_color: bool,
+        scales: Optional[Sequence[float]],
+    ) -> Tuple[Tuple[int, int], float]:
+        """Dispatches to single-scale or multi-scale matching."""
+        if scales is None:
+            return cls.match_template(haystack=haystack, needle=needle, roi=roi, verify_color=verify_color)
+        center, score, _ = cls.match_template_multiscale(
+            haystack=haystack, needle=needle, scales=scales, roi=roi, verify_color=verify_color
+        )
+        return center, score
+
+    @classmethod
     def find_template(
         cls,
         haystack: Union[np.ndarray, str, Path],
@@ -194,18 +296,18 @@ class ImageMatcher:
         confidence: float = 0.8,
         roi: Optional[Tuple[int, int, int, int]] = None,
         verify_color: bool = False,
+        scales: Optional[Sequence[float]] = None,
     ) -> Optional[Tuple[int, int, float]]:
         """Searches for needle template in haystack.
 
         Returns (center_x, center_y, confidence) if matched with score >= confidence,
         otherwise None.
+
+        Args:
+            scales: Optional template resize factors for multi-scale matching
+                (see :meth:`match_template_multiscale`); None matches at native size.
         """
-        (center_x, center_y), score = cls.match_template(
-            haystack=haystack,
-            needle=needle,
-            roi=roi,
-            verify_color=verify_color,
-        )
+        (center_x, center_y), score = cls._match(haystack, needle, roi, verify_color, scales)
 
         if score >= confidence:
             return (center_x, center_y, score)
@@ -220,8 +322,13 @@ class ImageMatcher:
         roi: Optional[Tuple[int, int, int, int]] = None,
         mode: str = "appear",
         verify_color: bool = False,
+        scales: Optional[Sequence[float]] = None,
     ) -> Tuple[bool, Optional[Tuple[int, int]], float]:
         """Checks match condition based on appearance or disappearance mode.
+
+        Args:
+            scales: Optional template resize factors for multi-scale matching
+                (see :meth:`match_template_multiscale`); None matches at native size.
 
         Returns:
             Tuple of (condition_met, center_coordinates_or_None, score).
@@ -230,12 +337,7 @@ class ImageMatcher:
         if mode_lower not in ("appear", "disappear"):
             raise ValueError(f"Invalid mode: {mode!r}. Must be 'appear' or 'disappear'")
 
-        (center_x, center_y), score = cls.match_template(
-            haystack=haystack,
-            needle=needle,
-            roi=roi,
-            verify_color=verify_color,
-        )
+        (center_x, center_y), score = cls._match(haystack, needle, roi, verify_color, scales)
 
         is_present = score >= confidence
 

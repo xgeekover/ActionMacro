@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "action-macro"
+name = "ActionMacro"
 version = "0.1.0"
 description = "ActionMacro: Cross-platform precision desktop automation tool"
 requires-python = ">=3.10"
@@ -36,7 +36,8 @@ dev = [
 ]
 
 [project.scripts]
-action-macro = "action_macro.__main__:main"
+ActionMacro = "action_macro.__main__:main"
+actionmacro = "action_macro.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/action_macro"]

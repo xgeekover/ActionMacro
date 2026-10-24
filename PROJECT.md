@@ -102,7 +102,7 @@ Every requirement from ORIGINAL_REQUEST.md is enumerated and assigned to a miles
 
 ## Code Layout
 ```
-action_macro/
+ActionMacro/
 ├── pyproject.toml
 ├── README.md
 ├── src/

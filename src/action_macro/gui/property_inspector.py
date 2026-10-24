@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from action_macro.core.key_mapping import (
+    build_key_chord,
     format_key_combo,
     parse_key_combo,
 )
@@ -43,6 +44,17 @@ from action_macro.core.models import (
     KeyInputParams,
     MouseClickParams,
 )
+
+# Global (virtual desktop) coordinate bounds. Monitors placed left of or above
+# the primary display have negative origins, so the lower bound must be negative;
+# clamping to 0 would silently retarget clicks onto the primary display.
+COORD_MIN = -99999
+COORD_MAX = 99999
+COORD_TOOLTIP = (
+    "Global desktop coordinate. Negative values address monitors placed "
+    "left of or above the primary display."
+)
+ROI_ORIGIN_TOOLTIP = "Top-left corner of the search region in global desktop coordinates."
 
 
 class MouseClickForm(QWidget):
@@ -67,13 +79,15 @@ class MouseClickForm(QWidget):
 
         grid.addWidget(QLabel("X Coordinate:"), 0, 0)
         self.spin_x = QSpinBox()
-        self.spin_x.setRange(0, 99999)
+        self.spin_x.setRange(COORD_MIN, COORD_MAX)
+        self.spin_x.setToolTip(COORD_TOOLTIP)
         self.spin_x.valueChanged.connect(self._on_changed)
         grid.addWidget(self.spin_x, 0, 1)
 
         grid.addWidget(QLabel("Y Coordinate:"), 1, 0)
         self.spin_y = QSpinBox()
-        self.spin_y.setRange(0, 99999)
+        self.spin_y.setRange(COORD_MIN, COORD_MAX)
+        self.spin_y.setToolTip(COORD_TOOLTIP)
         self.spin_y.valueChanged.connect(self._on_changed)
         grid.addWidget(self.spin_y, 1, 1)
 
@@ -172,22 +186,38 @@ class KeyInputForm(QWidget):
         grid.addWidget(QLabel("Action Mode:"), 0, 0)
         self.combo_action = QComboBox()
         self.combo_action.addItems(["press", "down", "up"])
+        self.combo_action.setToolTip(
+            "press: tap the key or shortcut once.\n"
+            "down: press all keys in order and keep holding them.\n"
+            "up: release all keys in reverse order."
+        )
         self.combo_action.currentIndexChanged.connect(self._on_changed)
         grid.addWidget(self.combo_action, 0, 1)
 
         grid.addWidget(QLabel("Keys:"), 1, 0)
         self.edit_keys = QLineEdit()
-        self.edit_keys.setPlaceholderText("e.g. enter or ctrl+c or a")
+        self.edit_keys.setPlaceholderText("e.g. enter, a, ctrl+c or cmd_or_ctrl+shift+t")
+        self.edit_keys.setToolTip(
+            "Keys joined with '+' form one shortcut and are pressed together: "
+            "they go down in order, the last key is held for the press duration, "
+            "then all are released in reverse order."
+        )
         self.edit_keys.textChanged.connect(self._on_changed)
         grid.addWidget(self.edit_keys, 1, 1)
 
-        grid.addWidget(QLabel("Press Duration (ms):"), 2, 0)
+        self.lbl_keys_help = QLabel("Keys joined with + are pressed together as one shortcut.")
+        self.lbl_keys_help.setWordWrap(True)
+        self.lbl_keys_help.setStyleSheet("color: #888888; font-size: 11px;")
+        grid.addWidget(self.lbl_keys_help, 2, 1)
+
+        grid.addWidget(QLabel("Press Duration (ms):"), 3, 0)
         self.spin_duration = QSpinBox()
         self.spin_duration.setRange(0, 10000)
         self.spin_duration.setSingleStep(10)
         self.spin_duration.setValue(50)
+        self.spin_duration.setToolTip("How long the last key of the shortcut is held (press mode only).")
         self.spin_duration.valueChanged.connect(self._on_changed)
-        grid.addWidget(self.spin_duration, 2, 1)
+        grid.addWidget(self.spin_duration, 3, 1)
 
         layout.addWidget(grp_key)
 
@@ -246,11 +276,11 @@ class KeyInputForm(QWidget):
         if idx >= 0:
             self.combo_action.setCurrentIndex(idx)
 
-        keys_raw = params.get("keys", ["enter"])
-        if isinstance(keys_raw, list):
-            self.edit_keys.setText("+".join(keys_raw))
-        else:
-            self.edit_keys.setText(str(keys_raw))
+        # A saved ``modifiers`` field is shown in front of the keys as one combo. The
+        # engine runs modifiers + keys as one chord, so saving the combo back as keys
+        # keeps the shortcut instead of silently dropping the modifiers.
+        chord = build_key_chord(params.get("modifiers"), params.get("keys", ["enter"]))
+        self.edit_keys.setText("+".join(str(k) for k in chord))
 
         self.spin_duration.setValue(int(params.get("press_duration_ms", 50)))
         self._block_signals = False
@@ -443,13 +473,15 @@ class ImageWaitForm(QWidget):
 
         rgrid.addWidget(QLabel("X:"), 1, 0)
         self.spin_rx = QSpinBox()
-        self.spin_rx.setRange(0, 99999)
+        self.spin_rx.setRange(COORD_MIN, COORD_MAX)
+        self.spin_rx.setToolTip(ROI_ORIGIN_TOOLTIP)
         self.spin_rx.valueChanged.connect(self._on_changed)
         rgrid.addWidget(self.spin_rx, 1, 1)
 
         rgrid.addWidget(QLabel("Y:"), 2, 0)
         self.spin_ry = QSpinBox()
-        self.spin_ry.setRange(0, 99999)
+        self.spin_ry.setRange(COORD_MIN, COORD_MAX)
+        self.spin_ry.setToolTip(ROI_ORIGIN_TOOLTIP)
         self.spin_ry.valueChanged.connect(self._on_changed)
         rgrid.addWidget(self.spin_ry, 2, 1)
 

@@ -15,7 +15,7 @@ from typing import List, Optional
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI and GUI launcher entry point."""
     parser = argparse.ArgumentParser(
-        prog="action-macro",
+        prog="ActionMacro",
         description="ActionMacro Automation Desktop Tool",
     )
     parser.add_argument(
@@ -49,6 +49,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
 
         from action_macro.core.persistence import ScenarioPersistence
+        from action_macro.engine.macos_keyboard import refresh_keyboard_layout_cache
         from action_macro.runner.execution_engine import ExecutionEngine
         from action_macro.runner.hotkey_listener import GlobalHotkeyListener
 
@@ -56,6 +57,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.loops is not None:
             scenario.loop_count = args.loops
 
+        refresh_keyboard_layout_cache()  # main thread; pynput's listener thread reuses it (macOS)
         print(f"Executing '{scenario.name}' headlessly ({scenario.loop_count} loops)...")
         engine = ExecutionEngine(scenario=scenario, base_dir=path.parent)
         hotkey_listener = GlobalHotkeyListener(engine=engine)

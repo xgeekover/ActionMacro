@@ -102,7 +102,7 @@ def create_app(argv: Optional[List[str]] = None) -> QApplication:
         app = QApplication(argv or sys.argv)
 
     app.setApplicationName("ActionMacro")
-    app.setOrganizationName("BlueStacksMacro")
+    app.setOrganizationName("ActionMacro")
     app.setApplicationVersion("0.1.0")
 
     app.setStyleSheet(DARK_STYLESHEET)
@@ -112,6 +112,11 @@ def create_app(argv: Optional[List[str]] = None) -> QApplication:
 def run_app(argv: Optional[List[str]] = None, scenario_path: Optional[str] = None) -> int:
     """Launches the full interactive desktop application."""
     app = create_app(argv)
+
+    # Read the keyboard layout on the main thread so pynput never has to (macOS).
+    from action_macro.engine.macos_keyboard import refresh_keyboard_layout_cache
+
+    refresh_keyboard_layout_cache()
 
     from action_macro.gui.main_window import MainWindow
     window = MainWindow()

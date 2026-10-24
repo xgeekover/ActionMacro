@@ -352,7 +352,9 @@ class TestMalformedAndAdversarialInputs:
     def test_mouse_form_negative_and_extreme_coordinates(self, qtbot):
         """
         Coordinates fed to MouseClickForm:
-        - Negative coordinates should be clamped to 0 by QSpinBox minimum
+        - Negative coordinates are kept as-is (monitors left of / above the primary
+          display have negative global coordinates)
+        - Extreme coordinates < -99999 should be clamped to -99999
         - Extreme coordinates > 99999 should be clamped to 99999
         """
         inspector = PropertyInspector()
@@ -367,10 +369,17 @@ class TestMalformedAndAdversarialInputs:
 
         # Inject negative coordinates via set_coordinates
         inspector.set_coordinates(-500, -999)
-        assert inspector.form_mouse.spin_x.value() == 0
-        assert inspector.form_mouse.spin_y.value() == 0
-        assert act.params.x == 0
-        assert act.params.y == 0
+        assert inspector.form_mouse.spin_x.value() == -500
+        assert inspector.form_mouse.spin_y.value() == -999
+        assert act.params.x == -500
+        assert act.params.y == -999
+
+        # Inject extreme negative coordinates
+        inspector.set_coordinates(-1000000, -500000)
+        assert inspector.form_mouse.spin_x.value() == -99999
+        assert inspector.form_mouse.spin_y.value() == -99999
+        assert act.params.x == -99999
+        assert act.params.y == -99999
 
         # Inject extreme coordinates
         inspector.set_coordinates(1000000, 500000)

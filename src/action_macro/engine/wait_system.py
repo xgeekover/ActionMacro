@@ -15,9 +15,30 @@ from typing import Any, Optional, Tuple, Union
 
 from action_macro.core.models import ImageWaitParams, TimeoutAction
 from action_macro.core.persistence import resolve_template_path
-from action_macro.engine.image_matcher import ImageMatcher, load_template_image
+from action_macro.engine.image_matcher import ImageMatcher, load_template_image, scaled_template_size
 
 logger = logging.getLogger(__name__)
+
+
+def _template_scales(screen_adapter: Any) -> Tuple[float, ...]:
+    """Template resize factors the adapter's captures call for (native size if it has no opinion)."""
+    getter = getattr(screen_adapter, "get_template_scales", None)
+    if callable(getter):
+        scales = tuple(float(s) for s in getter() if float(s) > 0.0)
+        if scales:
+            return scales
+    return (1.0,)
+
+
+def _fits_at_any_scale(
+    templ_w: int, templ_h: int, area_w: int, area_h: int, scales: Tuple[float, ...]
+) -> bool:
+    """True if the template, resized by at least one factor, fits inside the area."""
+    for scale in scales:
+        scaled_w, scaled_h = scaled_template_size(templ_w, templ_h, scale)
+        if scaled_w <= area_w and scaled_h <= area_h:
+            return True
+    return False
 
 
 class WaitSystem:
@@ -96,6 +117,12 @@ class WaitSystem:
           - wait_image(screen_adapter, params, cancel_event=...)
           - wait_image(params, screen_adapter, cancel_event=...)
 
+        If the adapter provides ``get_template_scales()``, the template is also matched
+        at those resize factors (a HiDPI screenshot against a nominal-resolution
+        capture) and the best-scoring size wins; sizes that do not fit the capture are
+        skipped. If the adapter provides ``get_capture_origin(roi)``, returned
+        coordinates are translated into the adapter's global (click) coordinate space.
+
         Args:
             first_arg: Either screen_adapter or params (ImageWaitParams or dict).
             second_arg: Either params or screen_adapter.
@@ -108,7 +135,8 @@ class WaitSystem:
 
         Raises:
             FileNotFoundError: If template file does not exist.
-            ValueError: If template dimensions exceed screen or ROI bounds.
+            ValueError: If the template exceeds the screen or ROI bounds at every
+                candidate scale.
             TimeoutError: If wait times out and timeout_action is 'raise'.
         """
         # 1. Flexible argument order normalization
@@ -146,11 +174,20 @@ class WaitSystem:
         # Pre-load template image and check dimensions
         template_gray = load_template_image(template_file)
         templ_h, templ_w = template_gray.shape[:2]
+        scales = _template_scales(screen_adapter)
+        multiscale = scales != (1.0,)
 
         if params.roi is not None:
             _, _, roi_w, roi_h = params.roi
-            if templ_w > roi_w or templ_h > roi_h:
+            if not _fits_at_any_scale(templ_w, templ_h, roi_w, roi_h, scales):
                 raise ValueError("Template dimensions exceed ROI bounding box")
+
+        # Adapters that report their capture origin return frames that are exactly the
+        # captured region; match on the whole frame and translate to global coordinates.
+        origin_getter = getattr(screen_adapter, "get_capture_origin", None)
+        has_origin = callable(origin_getter)
+        match_roi = None if has_origin else params.roi
+        origin_x, origin_y = origin_getter(params.roi) if has_origin else (0, 0)
 
         # 3. Setup polling timeout deadline
         timeout_sec = float(params.timeout_seconds)
@@ -179,7 +216,7 @@ class WaitSystem:
 
             # Validate frame bounds against template
             fh, fw = frame.shape[:2]
-            if templ_w > fw or templ_h > fh:
+            if not _fits_at_any_scale(templ_w, templ_h, fw, fh, scales):
                 raise ValueError("Template dimensions exceed screen or ROI bounds")
 
             # Check matching condition via ImageMatcher
@@ -187,11 +224,14 @@ class WaitSystem:
                 haystack=frame,
                 needle=template_gray,
                 confidence=params.confidence,
-                roi=params.roi,
+                roi=match_roi,
                 mode=params.mode,
+                scales=scales if multiscale else None,
             )
 
             if matched:
+                if coords is not None:
+                    coords = (coords[0] + origin_x, coords[1] + origin_y)
                 return (True, coords)
 
             # Check if timeout deadline passed

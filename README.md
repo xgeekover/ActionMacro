@@ -38,7 +38,7 @@
   - **이미지 인식 대기**: OpenCV 템플릿 매칭 기반. 화면에서 특정 아이콘/버튼이 **나타날 때(appear)** 또는 **사라질 때(disappear)**까지 스마트 대기 (ROI 탐색 영역 지정, 유사도 임계값, 타임아웃 지원)
 - **🛡️ 실행 제어 및 안전 장치 (Safety & Execution Control)**
   - N회 지정 반복 또는 무한 루프 실행 제어
-  - **글로벌 긴급 정지 핫키 (`<Ctrl>+<Shift>+<S>` 또는 `<Esc>`)**: 매크로 실행 중 언제든 1초 이내(평균 0.34ms) 즉각 중단 및 OS 입력 안전 해제(Safety Flush)
+  - **글로벌 긴급 정지 핫키 (`<Ctrl>+<Shift>+<S>` 또는 `<Esc>`)**: 매크로 실행 중 언제든 즉각 중단 — 진행 중인 다중 클릭·길게 누르기도 50ms 이내에 끊고 OS 입력 안전 해제(Safety Flush)
   - 실행 중 현재 진행 루프 및 실행 중인 액션 카드 실시간 하이라이트
   - 5,000줄 메모리 버퍼 상한이 적용된 실시간 컬러 로그 콘솔
 - **💾 크로스 플랫폼 시나리오 호환 (Cross-Platform JSON)**
@@ -87,8 +87,8 @@
 
 ### 1. 저장소 복제 (Clone)
 ```bash
-git clone https://github.com/xgeekover/action-macro.git
-cd action-macro
+git clone https://github.com/xgeekover/ActionMacro.git
+cd ActionMacro
 ```
 
 ### 2. 가상환경 생성 및 의존성 설치
@@ -116,23 +116,23 @@ pip install -e ".[dev]"
 # 가상환경 활성화 상태에서:
 python -m action_macro
 
-# 또는 등록된 CLI 진입점 사용:
-action-macro
+# 또는 등록된 실행 명령 사용 (소문자 별칭 `actionmacro` 도 같은 동작):
+ActionMacro
 ```
 
 ### 2. 저장된 시나리오 파일 직접 열기
 ```bash
-action-macro my_scenario.json
+ActionMacro my_scenario.json
 ```
 
 ### 3. 백그라운드 무인(Headless) 실행
 GUI 창 없이 백그라운드에서 특정 횟수만큼 시나리오를 돌리고자 할 때 사용합니다:
 ```bash
 # 10회 반복 실행
-action-macro --headless my_scenario.json --loops 10
+ActionMacro --headless my_scenario.json --loops 10
 
 # 무한 반복 실행 (긴급 정지는 <Ctrl>+<Shift>+<S> 또는 Ctrl+C)
-action-macro --headless my_scenario.json --loops 0
+ActionMacro --headless my_scenario.json --loops 0
 ```
 
 ---
@@ -142,7 +142,9 @@ action-macro --headless my_scenario.json --loops 0
 ### Step 1. 액션 블록 구성 (Visual Builder)
 1. 프로그램 상단의 버튼을 눌러 원하는 액션을 시나리오에 추가합니다:
    - **`+ Add Mouse Click`**: 지정 좌표를 클릭합니다 (좌클릭, 우클릭, 더블클릭, 클릭 유지 시간 등 지원).
-   - **`+ Add Key Input`**: 특정 키 입력 또는 단축키 조합(예: `ctrl+c`, `enter`, `f5`)을 실행합니다.
+   - **`+ Add Key Input`**: 특정 키 입력 또는 단축키 조합(예: `ctrl+c`, `cmd_or_ctrl+shift+t`, `enter`, `f5`)을 실행합니다.
+     - `+`로 이은 키는 **하나의 단축키로 동시에** 눌립니다: 앞의 키들을 순서대로 누른 채 마지막 키를 `Press Duration`만큼 누르고, 역순으로 뗍니다. (예: `ctrl+c` → Ctrl 누름 → C 누름 → C 뗌 → Ctrl 뗌)
+     - `Action Mode`: `press`는 한 번 누르고 떼기, `down`은 모든 키를 순서대로 누른 채 유지, `up`은 그 키들을 역순으로 뗍니다. (예: `down shift` → 마우스 클릭 → `up shift`로 Shift+클릭)
    - **`+ Add Fixed Wait`**: 지정한 시간(ms) 동안 대기합니다.
    - **`+ Add Image Wait`**: 특정 이미지(버튼, 완료 화면 등)가 화면에 감지될 때까지 대기합니다.
 2. 카드 우측의 **`▲`**, **`▼`** 버튼 또는 **마우스 드래그 앤 드롭**으로 실행 순서를 자유롭게 바꿀 수 있습니다.
@@ -155,6 +157,7 @@ action-macro --headless my_scenario.json --loops 0
 2. 우측 속성 패널의 **`📍 Pick Screen Coordinate`** 버튼(또는 상단 툴바의 **`📍`** 아이콘 / 단축키 `Ctrl+P`)을 누릅니다.
 3. 화면 전체에 반투명 오버레이와 함께 **8배율 돋보기 십자선**이 마우스 커서를 따라다닙니다.
 4. 블루스택이나 대상 프로그램의 버튼 위치에 십자선을 올리고 **마우스 왼쪽 클릭**을 누르면 해당 좌표가 자동으로 액션에 쏙 들어갑니다.
+   - 주 모니터의 왼쪽이나 위쪽에 둔 보조 모니터에서는 좌표가 음수(예: `X: -1200`)로 들어옵니다. 음수도 그대로 저장되어 그 위치를 클릭합니다.
 5. 측정을 취소하려면 키보드의 **`ESC`**를 누르세요.
 
 ---
@@ -173,6 +176,8 @@ action-macro --headless my_scenario.json --loops 0
   - `Confidence (0.0 ~ 1.0)`: 이미지 일치율 (기본값 `0.8` 권장)
   - `Timeout (초)`: 지정 시간 동안 이미지를 찾지 못했을 때의 처리 시간
   - `Timeout Policy`: 타임아웃 초과 시 매크로를 중단할지(`raise`), 다음 동작으로 넘어갈지(`skip`) 선택
+  - `Region of Interest (ROI)` (선택): 탐색 영역 `X, Y, Width, Height`. 클릭 좌표와 같은 **전역 화면 좌표**입니다 — 주 모니터 왼쪽 위가 `(0, 0)`이고, 주 모니터의 왼쪽·위쪽에 놓인 보조 모니터는 음수 좌표입니다. ROI를 지정하지 않으면 **연결된 모든 모니터**(가상 데스크톱 전체)에서 찾습니다.
+- **템플릿 배율 자동 보정**: 화면은 클릭 좌표와 같은 단위(macOS는 포인트, Windows는 물리 픽셀)로 캡처됩니다. macOS Retina에서 `Cmd+Shift+4`로 찍은 템플릿은 2배 크기라서, 템플릿을 원래 크기와 `1/디스플레이 배율` 크기로 각각 맞춰 보고 일치율이 가장 높은 결과를 씁니다. macOS는 디스플레이 배율을 직접 조회하고(Retina 2배는 항상 포함), 조회할 수 없거나 Windows에서는 1.25·1.5·2배를 가정합니다. 찾은 위치는 항상 클릭에 쓰는 좌표로 돌려줍니다. 줄인 템플릿이 ROI보다 큰 배율은 건너뛰며, 모든 배율에서 ROI보다 크면 오류로 알려 줍니다.
 
 ---
 
@@ -183,12 +188,12 @@ action-macro --headless my_scenario.json --loops 0
 ---
 
 ### Step 5. 매크로 실행 및 긴급 정지 (Execution & Safety)
-1. 우측 상단의 **Loop Count**에서 반복 실행 횟수(`1` ~ `9999`)를 지정하거나 `0`을 입력하여 **무한 반복**을 설정합니다.
-2. **`▶ Start Macro (F5)`** 버튼을 누르면 매크로가 실행됩니다.
+1. 우측 대시보드의 **Repeat Count**에서 반복 실행 횟수를 지정하거나 **Infinite Loop**를 체크하여 **무한 반복**을 설정합니다.
+2. 대시보드의 **`▶ Start`** 버튼, 상단 툴바나 **Run** 메뉴의 **Start Execution**, 단축키 **`F5`** 중 어느 것으로 시작해도 똑같이 **Repeat Count**만큼 실행합니다.
 3. 매크로가 도는 동안 **현재 실행 중인 카드가 황금색 테두리로 하이라이트**되며, 진행률과 상세 로그가 실시간 출력됩니다.
 4. **긴급 정지 (Emergency Stop)**:
    - 게임 도중 긴급하게 멈춰야 할 때는 화면의 정지 버튼을 누르거나, 키보드의 **`<Ctrl> + <Shift> + <S>`** 또는 **`<Esc>`**를 누르세요.
-   - 0.02초 이내에 모든 동작이 즉시 중단되며, 눌려 있던 마우스/키보드 상태가 안전하게 원상 복구됩니다.
+   - 진행 중인 다중 클릭·길게 누르기·단축키 입력도 0.05초(50ms) 이내에 끊기고 그 뒤로는 새 입력이 나가지 않으며, 눌려 있던 마우스/키보드 상태가 즉시 원상 복구됩니다.
 
 ---
 
@@ -208,9 +213,9 @@ macOS에서 마우스 자동 제어 및 화면 돋보기 캡처가 온전히 동
 
 ActionMacro는 엄격한 멀티 에이전트 품질 게이트와 독립 포렌식 감사를 거쳐 제작되었습니다:
 
-- **자동화 테스트 스위트**: **653 Passed, 1 Xfailed** (통과율 100%)
+- **자동화 테스트 스위트**: 전체 통과, `xfail`로 숨겨 둔 확인된 결함 없음 (보조 모니터 음수 좌표 회귀 테스트 포함)
 - **마우스 타격 오차**: 1,000회 무작위 좌표 정밀도 검증 결과 평균 오차 $\le 0.5$px
-- **긴급 정지 지연시간**: 평균 0.34ms (최대 25.7ms로 1.0초 기준 대폭 상회)
+- **긴급 정지 지연시간**: 진행 중인 다중 클릭·길게 누르기 도중 정지해도 실행 스레드 종료·눌린 버튼/키 해제까지 50ms 이내, 정지 50ms 뒤부터 새 입력 0건 (실측: 스레드 종료 평균 약 1ms, 최대 약 2ms). 실제 `PynputAdapter` 경로에서 OS 컨트롤러만 가짜로 바꿔 검증: `tests/e2e/test_input_engine_integration.py`
 
 ```bash
 # 전체 테스트 실행 (헤드리스 Qt 환경)

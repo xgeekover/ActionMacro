@@ -155,6 +155,30 @@ def parse_key_combo(combo_str: str) -> List[str]:
 parse_key_combination = parse_key_combo
 
 
+def build_key_chord(modifiers: Any, keys: Any) -> List[str]:
+    """Combines a KEY_INPUT action's ``modifiers`` and ``keys`` into one ordered chord.
+
+    Explicit modifiers come first, then keys, each in the order given. A key that
+    appears more than once (e.g. in both fields, or as an alias such as
+    ``control``/``ctrl``) is kept only at its first position. A single string is
+    accepted for either field. The engine executes this chord, and the GUI shows and
+    edits it, so a saved ``modifiers`` field survives editing in the inspector.
+    """
+    if isinstance(modifiers, str):
+        modifiers = [modifiers]
+    if isinstance(keys, str):
+        keys = [keys]
+    chord: List[str] = []
+    seen: Set[str] = set()
+    for k in [*(modifiers or []), *(keys or [])]:
+        norm = normalize_key_name(k)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        chord.append(k)
+    return chord
+
+
 def format_key_combo(keys: List[str], platform_name: Optional[str] = None) -> str:
     """
     Format a list of keys for user display based on platform conventions.

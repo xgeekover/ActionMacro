@@ -16,7 +16,7 @@ Adversarially tests:
    - Verifies zero deadlocks, thread pool / worker termination, and clean Qt signal queues.
 3. Coordinate Picker Multi-Display & Extremes:
    - Tests picking coordinates at extreme multi-monitor offsets (x=7680, y=4320, x=-3840, y=-2160).
-   - Documents and isolates multi-monitor coordinate clamping bug in PropertyInspector.
+   - Guards against clamping negative multi-monitor coordinates in PropertyInspector.
    - Tests rapid coordinate updates during active macro execution.
 4. Lifecycle Robustness:
    - Empty scenario start guard.
@@ -373,19 +373,14 @@ def test_stress_main_window_positive_coordinate_injection(qtbot) -> None:
         win.mark_dirty(False)
 
 
-@pytest.mark.xfail(
-    reason="BUG CONFIRMED: PropertyInspector.form_mouse QSpinBox range is (0, 99999), clamping negative multi-monitor coordinates (-3840, -2160) to 0",
-    strict=False,
-)
 def test_stress_main_window_negative_coordinate_injection_bug(qtbot) -> None:
-    """Empirically reproduces bug where negative coordinates (-3840, -2160) are clamped to 0.
+    """Regression guard: negative coordinates (-3840, -2160) must not be clamped to 0.
 
-    Root Cause:
-    In `src/action_macro/gui/property_inspector.py`:
-    `self.spin_x.setRange(0, 99999)`
-    `self.spin_y.setRange(0, 99999)`
-    Multi-monitor displays placed to the left or top of primary display produce negative
-    global coordinates. Injected negative coordinates get clamped to 0.
+    Former root cause (fixed):
+    In `src/action_macro/gui/property_inspector.py` the MouseClickForm spin boxes used
+    `setRange(0, 99999)`. Multi-monitor displays placed to the left or top of the primary
+    display produce negative global coordinates, which were silently clamped to 0.
+    The range now spans COORD_MIN..COORD_MAX (negative included).
     """
     mock_input = MockInputDriver()
     mock_screen = MockScreenDriver()
@@ -399,7 +394,7 @@ def test_stress_main_window_negative_coordinate_injection_bug(qtbot) -> None:
         # Pick negative coordinates on secondary monitor
         win.on_coordinate_picked(-3840, -2160)
 
-        # This assertion fails if spinbox clamps to 0
+        # These assertions fail if the spin boxes clamp to 0
         assert click_act.params.x == -3840, f"Expected -3840, got {click_act.params.x} (clamped to 0)"
         assert click_act.params.y == -2160, f"Expected -2160, got {click_act.params.y} (clamped to 0)"
     finally:

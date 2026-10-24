@@ -4,12 +4,17 @@ action_macro.engine.input_adapter
 Cross-platform mouse and keyboard input automation adapter utilizing pynput.
 Enforces <=1px mouse precision, key combination translation via core.key_mapping,
 discrete hold tracking, and fail-safe safety flushing.
+
+Blocking operations (multi-click intervals, press/hold durations, typing intervals)
+accept an optional ``cancel_event``. When it is set, no further press events are
+emitted and anything already held by the call is released before it returns.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple, Union, runtime_checkable
 
@@ -19,8 +24,14 @@ from action_macro.core.key_mapping import (
     resolve_key_for_platform,
     to_pynput_key,
 )
+from action_macro.engine.wait_system import WaitSystem
 
 logger = logging.getLogger(__name__)
+
+
+def _is_cancelled(cancel_event: Optional[threading.Event]) -> bool:
+    """Returns True if an optional cancellation event has been set."""
+    return cancel_event is not None and cancel_event.is_set()
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +54,12 @@ class InputAdapterProtocol(Protocol):
         count: int = 1,
         interval_ms: int = 0,
         press_duration: float = 0.05,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Executes mouse click at (x, y) with specified button and count."""
+        """Executes mouse click at (x, y) with specified button and count.
+
+        Stops early (releasing the button) once ``cancel_event`` is set.
+        """
         ...
 
     def mouse_down(
@@ -78,8 +93,14 @@ class InputAdapterProtocol(Protocol):
         key: str,
         modifiers: Optional[List[str]] = None,
         duration: float = 0.05,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Simulates a complete key press with optional modifiers."""
+        """Simulates a complete key press with optional modifiers held as one chord.
+
+        Modifiers go down in order, ``key`` is held for ``duration``, then everything
+        is released in reverse order. Stops early (still releasing) once
+        ``cancel_event`` is set.
+        """
         ...
 
     def key_down(self, key: str) -> None:
@@ -94,11 +115,16 @@ class InputAdapterProtocol(Protocol):
         """Alias for key_up conforming to InputAdapterProtocol."""
         ...
 
-    def hotkey(self, *keys: str) -> None:
+    def hotkey(self, *keys: str, cancel_event: Optional[threading.Event] = None) -> None:
         """Dispatches a multi-key shortcut combination in strict order."""
         ...
 
-    def type_text(self, text: str, interval: float = 0.02) -> None:
+    def type_text(
+        self,
+        text: str,
+        interval: float = 0.02,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
         """Types unicode or ASCII text string."""
         ...
 
@@ -209,23 +235,36 @@ class PynputAdapter:
         count: int = 1,
         interval_ms: int = 0,
         press_duration: float = 0.05,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Executes mouse click at (x, y) with specified button, count, and press duration."""
+        """Executes mouse click at (x, y) with specified button, count, and press duration.
+
+        Hold and inter-click waits wake up as soon as ``cancel_event`` is set: no
+        further button presses are issued and a held button is released immediately.
+        """
         self._check_controllers()
+        if _is_cancelled(cancel_event):
+            return
         self.move_to(x, y)
         norm_button = button.strip().lower()
         btn_enum = self._resolve_button(norm_button)
 
         for i in range(count):
+            if _is_cancelled(cancel_event):
+                break
+
             if press_duration > 0.0:
                 self.mouse_down(norm_button)
-                time.sleep(press_duration)
-                self.mouse_up(norm_button)
+                try:
+                    WaitSystem.wait(press_duration, cancel_event=cancel_event)
+                finally:
+                    self.mouse_up(norm_button)
             else:
                 self._mouse.click(btn_enum, 1)
 
             if count > 1 and interval_ms > 0 and i < count - 1:
-                time.sleep(interval_ms / 1000.0)
+                if not WaitSystem.wait(interval_ms / 1000.0, cancel_event=cancel_event):
+                    break
 
         self._last_click = {
             "x": int(round(float(x))),
@@ -287,28 +326,49 @@ class PynputAdapter:
         key: str,
         modifiers: Optional[List[str]] = None,
         duration: float = 0.05,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Simulates a complete key press with optional modifiers held down."""
+        """Simulates a complete key press with optional modifiers held down.
+
+        Modifiers are pressed in order and kept down, ``key`` is held for
+        ``duration`` seconds, then every pressed key is released in reverse order.
+        The release is guaranteed (try/finally) even if a press fails or
+        ``cancel_event`` is set mid-way; once cancelled, no further key is pressed.
+        """
         self._check_controllers()
+        if _is_cancelled(cancel_event):
+            return
         mods = [normalize_key_name(m) for m in modifiers] if modifiers else []
 
-        # 1. Press modifiers down in order
-        for mod in mods:
-            self.key_down(mod)
+        pressed: List[str] = []
+        try:
+            # 1. Press modifiers down in order, then the target key
+            for k in [*mods, key]:
+                if _is_cancelled(cancel_event):
+                    return
+                # Track before pressing: key_down marks the key active even on failure.
+                pressed.append(k)
+                self.key_down(k)
 
-        # 2. Press target key
-        self.key_down(key)
+            # 2. Hold duration (wakes immediately on cancellation)
+            if duration > 0.0:
+                WaitSystem.wait(duration, cancel_event=cancel_event)
+        finally:
+            # 3. Release target key, then modifiers, in reverse order
+            self._release_keys_reversed(pressed)
 
-        # 3. Hold duration
-        if duration > 0.0:
-            time.sleep(duration)
-
-        # 4. Release target key
-        self.key_up(key)
-
-        # 5. Release modifiers in reverse order
-        for mod in reversed(mods):
-            self.key_up(mod)
+    def _release_keys_reversed(self, keys: List[str]) -> None:
+        """Releases ``keys`` in reverse order, attempting every key even if one fails."""
+        first_error: Optional[BaseException] = None
+        for k in reversed(keys):
+            try:
+                self.key_up(k)
+            except Exception as err:
+                logger.warning("Failed to release key %r: %s", k, err)
+                if first_error is None:
+                    first_error = err
+        if first_error is not None:
+            raise first_error
 
     def key_down(self, key: str) -> None:
         """Presses and holds a keyboard key."""
@@ -341,7 +401,7 @@ class PynputAdapter:
         """Alias for key_up."""
         self.key_up(key)
 
-    def hotkey(self, *keys: str) -> None:
+    def hotkey(self, *keys: str, cancel_event: Optional[threading.Event] = None) -> None:
         """Dispatches a multi-key shortcut combination in strict order."""
         self._check_controllers()
         if not keys:
@@ -354,24 +414,35 @@ class PynputAdapter:
             else:
                 resolved_tokens.append(normalize_key_name(token))
 
-        # Press down in order
-        for k in resolved_tokens:
-            self.key_down(k)
+        if not resolved_tokens:
+            return
 
-        # Brief delay for OS window manager to register combo
-        time.sleep(0.02)
+        # Press down in order, hold briefly for the OS window manager to register
+        # the combo, then release in reverse order.
+        self.press_key(
+            resolved_tokens[-1],
+            modifiers=resolved_tokens[:-1],
+            duration=0.02,
+            cancel_event=cancel_event,
+        )
 
-        # Release in reverse order
-        for k in reversed(resolved_tokens):
-            self.key_up(k)
-
-    def type_text(self, text: str, interval: float = 0.02) -> None:
-        """Types unicode or ASCII text string."""
+    def type_text(
+        self,
+        text: str,
+        interval: float = 0.02,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Types unicode or ASCII text string, stopping early once ``cancel_event`` is set."""
         self._check_controllers()
+        if _is_cancelled(cancel_event):
+            return
         if interval > 0.0:
             for ch in text:
+                if _is_cancelled(cancel_event):
+                    return
                 self._keyboard.type(ch)
-                time.sleep(interval)
+                if not WaitSystem.wait(interval, cancel_event=cancel_event):
+                    return
         else:
             self._keyboard.type(text)
 

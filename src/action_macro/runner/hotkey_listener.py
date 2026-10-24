@@ -340,6 +340,11 @@ class GlobalHotkeyListener:
 
             if not self._headless:
                 try:
+                    # pynput's listener thread reads the keyboard layout via TSM, which macOS
+                    # only allows on the main thread: hand it a layout read here instead.
+                    from action_macro.engine.macos_keyboard import refresh_keyboard_layout_cache
+
+                    refresh_keyboard_layout_cache()
                     from pynput.keyboard import GlobalHotKeys
                     self._native_listener = GlobalHotKeys(self._hotkey_map)
                     self._native_listener.daemon = True

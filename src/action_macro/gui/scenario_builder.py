@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from action_macro.core.key_mapping import build_key_chord
 from action_macro.core.models import (
     ActionBlock,
     ActionType,
@@ -160,7 +161,7 @@ class ActionCardWidget(QFrame):
         if act_type == ActionType.MOUSE_CLICK:
             self.lbl_summary.setText(f"Coords: ({p['x']}, {p['y']}) | Button: {p['button']} | Clicks: {p['clicks']}")
         elif act_type == ActionType.KEY_INPUT:
-            keys_str = "+".join(p['keys']) if isinstance(p['keys'], list) else str(p['keys'])
+            keys_str = "+".join(str(k) for k in build_key_chord(p.get('modifiers'), p['keys']))
             self.lbl_summary.setText(f"Keys: [{keys_str}] | Mode: {p['action']}")
         elif act_type == ActionType.FIXED_WAIT:
             sec = p['duration_ms'] / 1000.0

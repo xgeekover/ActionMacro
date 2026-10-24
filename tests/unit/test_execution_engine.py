@@ -641,8 +641,29 @@ class TestErrorHandlingBoundaries:
         assert len(engine.signals.finished) == 1
         assert engine.signals.finished[0][0] is False
 
-    def test_image_wait_without_screen_driver_raises_error(self, mock_input: MockInputDriver):
-        """Verifies executing ImageWait without a screen driver raises ValueError."""
+    def test_image_wait_without_screen_driver_uses_owned_mss_adapter(
+        self, mock_input: MockInputDriver, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Without an injected screen driver the engine builds (and releases) its own MSS adapter.
+
+        The real GUI and headless paths never inject a screen driver, so ImageWait must not
+        fail with "Screen driver required"; the next error here is the missing template file.
+        """
+        import mss
+
+        created: List[Any] = []
+
+        class _FakeMSS:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                self.closed = False
+                created.append(self)
+
+            def close(self) -> None:
+                self.closed = True
+
+        monkeypatch.setattr(mss, "MSS", _FakeMSS)
+        monkeypatch.setattr(mss, "mss", _FakeMSS)
+
         scenario = ScenarioModel(
             name="Missing Screen",
             actions=[
@@ -651,7 +672,9 @@ class TestErrorHandlingBoundaries:
         )
         engine = ExecutionEngine(scenario, input_driver=mock_input, screen_driver=None)
 
-        with pytest.raises(ValueError, match="Screen driver required"):
+        with pytest.raises(FileNotFoundError, match="btn.png"):
             engine.run()
 
         assert engine.state == EngineState.ERROR
+        assert engine.screen_driver is None
+        assert all(sct.closed for sct in created)
