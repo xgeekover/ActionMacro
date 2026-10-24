@@ -36,7 +36,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Override scenario loop count for headless execution (0 for infinite)",
     )
 
+    parser.add_argument(
+        "--self-test",
+        metavar="REPORT",
+        nargs="?",
+        const="",
+        default=None,
+        help=argparse.SUPPRESS,  # packaged-build start-up check (see action_macro.selftest)
+    )
+
     args = parser.parse_args(argv)
+
+    if args.self_test is not None:
+        from action_macro.selftest import run_self_test
+
+        return run_self_test(args.self_test or None)
 
     if args.headless:
         if not args.scenario:

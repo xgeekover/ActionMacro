@@ -1,0 +1,29 @@
+ActionMacro - third-party software notices
+==========================================
+
+The packaged ActionMacro app (installer and portable builds) contains the
+following third-party software. Each component stays under its own licence;
+the licence texts are available at the linked project pages.
+
+Component                     Licence                          Project
+----------------------------  -------------------------------  ---------------------------------------------
+Python                        PSF License                      https://www.python.org/
+Qt 6 (via PySide6)            LGPL-3.0                         https://www.qt.io/
+PySide6 / Shiboken6           LGPL-3.0                         https://wiki.qt.io/Qt_for_Python
+OpenCV (opencv-python-        Apache-2.0 (OpenCV), MIT         https://github.com/opencv/opencv-python
+  headless)                     (packaging); bundled FFmpeg
+                                is LGPL-2.1
+NumPy                         BSD-3-Clause (bundled OpenBLAS:  https://numpy.org/
+                                BSD-3-Clause)
+Pillow                        MIT-CMU (HPND)                   https://python-pillow.org/
+pynput                        LGPL-3.0                         https://github.com/moses-palmer/pynput
+python-mss                    MIT                              https://github.com/BoboTiG/python-mss
+six                           MIT                              https://github.com/benjaminp/six
+PyObjC (macOS builds only)    MIT                              https://github.com/ronaldoussoren/pyobjc
+Lucide icons                  ISC                              https://lucide.dev/
+PyInstaller bootloader        GPL-2.0 with the PyInstaller     https://pyinstaller.org/
+                                bootloader exception
+
+LGPL components (Qt, PySide6, Shiboken6, pynput, FFmpeg) are shipped as separate
+files in the app folder (one-folder build), so they can be replaced with other
+compatible versions. Their source code is available from the project pages above.

@@ -9,17 +9,18 @@
 
 1. [핵심 기능 (Key Features)](#-핵심-기능-key-features)
 2. [아키텍처 (Architecture)](#-아키텍처-architecture)
-3. [설치 및 요구사항 (Installation & Requirements)](#-설치-및-요구사항-installation--requirements)
-4. [실행 방법 (Quick Start)](#-실행-방법-quick-start)
-5. [상세 사용자 메뉴얼 가이드 (User Manual)](#-상세-사용자-메뉴얼-가이드-user-manual)
+3. [다운로드 (Releases)](#-다운로드-releases)
+4. [설치 및 요구사항 (Installation & Requirements)](#-설치-및-요구사항-installation--requirements)
+5. [실행 방법 (Quick Start)](#-실행-방법-quick-start)
+6. [상세 사용자 메뉴얼 가이드 (User Manual)](#-상세-사용자-메뉴얼-가이드-user-manual)
    - [Step 1. 액션 블록 구성](#step-1-액션-블록-구성-visual-builder)
    - [Step 2. 정밀 화면 좌표 측정 (돋보기 피커)](#step-2-정밀-화면-좌표-측정-coordinate-picker)
    - [Step 3. 듀얼 대기 시스템 (고정 대기 & 이미지 인식)](#step-3-듀얼-대기-시스템-dual-wait-system)
    - [Step 4. 시나리오 저장 및 불러오기](#step-4-시나리오-저장-및-불러오기-persistence)
    - [Step 5. 매크로 실행 및 긴급 정지](#step-5-매크로-실행-및-긴급-정지-execution--safety)
-6. [macOS 필수 보안 권한 설정](#-macos-필수-보안-권한-설정)
-7. [테스트 및 품질 검증 (Testing & QA)](#-테스트-및-품질-검증-testing--qa)
-8. [라이선스 (License)](#-라이선스-license)
+7. [macOS 필수 보안 권한 설정](#-macos-필수-보안-권한-설정)
+8. [테스트 및 품질 검증 (Testing & QA)](#-테스트-및-품질-검증-testing--qa)
+9. [라이선스 (License)](#-라이선스-license)
 
 ---
 
@@ -75,6 +76,24 @@
 │  - KeyMapping: 크로스 플랫폼 추상 키 코드 매핑                         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 📦 다운로드 (Releases)
+
+Python 없이 바로 쓰려면 [Releases](https://github.com/xgeekover/ActionMacro/releases/latest)에서 내 컴퓨터에 맞는 파일을 받습니다.
+
+| OS | 설치본 | 포터블 (설치 없이 실행) |
+|---|---|---|
+| macOS · Apple Silicon (M1 이후) | `ActionMacro-<버전>-macos-arm64.dmg` | `ActionMacro-<버전>-macos-arm64-portable.zip` |
+| macOS · Intel | `ActionMacro-<버전>-macos-x64.dmg` | `ActionMacro-<버전>-macos-x64-portable.zip` |
+| Windows 10/11 (64비트) | `ActionMacro-<버전>-windows-x64-setup.exe` | `ActionMacro-<버전>-windows-x64-portable.zip` |
+
+- **macOS**: DMG를 열어 `ActionMacro`를 `Applications`로 끌어 놓거나, 포터블 zip을 풀어 `ActionMacro.app`을 실행합니다. 앱에 Apple 개발자 서명·공증이 없어서 처음 열 때 macOS가 막습니다 — **시스템 설정 → 개인정보 보호 및 보안** 아래쪽의 **그래도 열기**를 누르세요. 그다음 [권한](#-macos-필수-보안-권한-설정)을 `ActionMacro`에 허용합니다.
+- **Windows**: `setup.exe`는 기본으로 현재 사용자에게 설치합니다(관리자 권한 불필요). 포터블은 zip을 풀고 `ActionMacro.exe`를 실행합니다. 코드 서명이 없어 SmartScreen이 막으면 **추가 정보 → 실행**을 누르세요. 관리자 권한으로 도는 프로그램(일부 게임·에뮬레이터)에 입력하려면 ActionMacro도 관리자 권한으로 실행해야 합니다.
+- 받은 파일은 릴리스의 `SHA256SUMS.txt`로 확인할 수 있습니다.
+
+패키지는 태그(`vX.Y.Z`)를 올리면 GitHub Actions(`.github/workflows/release.yml`)가 macOS·Windows에서 빌드하고, 각 패키지를 자체 점검(`ActionMacro --self-test`)한 뒤 초안 릴리스로 올립니다. 직접 만들려면 PyInstaller를 설치한 환경에서 `python packaging/build_release.py`를 실행합니다(결과: `dist/release/`).
 
 ---
 
@@ -199,13 +218,14 @@ ActionMacro --headless my_scenario.json --loops 0
 
 ## 🍎 macOS 필수 보안 권한 설정
 
-macOS에서 마우스 자동 제어 및 화면 돋보기 캡처가 온전히 동작하려면 시스템 권한이 필요합니다:
+macOS에서 마우스 자동 제어 및 화면 돋보기 캡처가 온전히 동작하려면 시스템 권한이 필요합니다. 허용할 대상은 **받은 앱(`ActionMacro.app`)으로 실행하면 `ActionMacro`**, 소스에서 실행하면 그 **터미널 앱**(Terminal / iTerm2 / VS Code 등)입니다. 앱의 **⋯ 메뉴 → Permissions…**에서 빠진 권한과 설정 화면 바로가기를 볼 수 있습니다.
 
 1. **시스템 설정 (System Settings)** $\to$ **개인정보 보호 및 보안 (Privacy & Security)**
-2. **손쉬운 사용 (Accessibility)**:
-   - 터미널 앱(Terminal / iTerm2 / VS Code 등)을 **허용**으로 설정합니다. (마우스/키보드 입력 제어에 필요)
-3. **화면 및 시스템 오디오 녹음 (Screen Recording)**:
-   - 터미널 앱을 **허용**으로 설정합니다. (돋보기 화면 캡처 및 이미지 인식에 필요)
+2. **손쉬운 사용 (Accessibility)**: **허용**으로 설정합니다. (마우스/키보드 입력 제어에 필요)
+3. **입력 모니터링 (Input Monitoring)**: **허용**으로 설정합니다. (긴급 정지 단축키 Esc · Ctrl+Shift+S 감지에 필요)
+4. **화면 및 시스템 오디오 녹음 (Screen Recording)**: **허용**으로 설정합니다. (돋보기 화면 캡처 및 이미지 인식에 필요)
+
+받은 앱은 개발자 서명 대신 임시(ad-hoc) 서명이라, 새 버전으로 바꾸면 macOS가 다른 앱으로 보고 권한을 다시 물을 수 있습니다. 이때는 목록의 옛 `ActionMacro` 항목을 지우고 다시 허용합니다.
 
 ---
 

@@ -1,0 +1,100 @@
+name: Release
+
+# Pushing a tag vX.Y.Z builds the installer and portable packages on macOS (Apple
+# Silicon, Intel) and Windows, self-tests each packaged app, and creates a DRAFT
+# GitHub release with all files and SHA-256 checksums. Publish the draft after
+# checking it. "Run workflow" (manual) builds and uploads the packages as workflow
+# artifacts only, without a release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macos-arm64
+          - os: macos-15-intel
+            label: macos-x64
+          - os: windows-latest
+            label: windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install the app and PyInstaller
+        shell: bash
+        run: |
+          uv sync --frozen --no-dev --no-editable
+          uv pip install pyinstaller==6.22.3 pyinstaller-hooks-contrib==2026.9
+
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build, self-test and package
+        shell: bash
+        run: |
+          EXPECT=""
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then EXPECT="--expect-version $GITHUB_REF_NAME"; fi
+          uv run --no-sync python packaging/build_release.py $EXPECT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: actionmacro-${{ matrix.label }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: actionmacro-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: artifacts
+        run: |
+          rm -f selftest-*.json
+          sha256sum ActionMacro-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          NOTES="packaging/release-notes/${TAG}.md"
+          if [ -f "$NOTES" ]; then NOTE_ARGS=(--notes-file "$NOTES"); else NOTE_ARGS=(--generate-notes); fi
+          gh release create "$TAG" artifacts/* --draft --title "ActionMacro ${TAG#v}" "${NOTE_ARGS[@]}"
