@@ -89,7 +89,15 @@ Python 없이 바로 쓰려면 [Releases](https://github.com/xgeekover/ActionMac
 | macOS · Intel | `ActionMacro-<버전>-macos-x64.dmg` | `ActionMacro-<버전>-macos-x64-portable.zip` |
 | Windows 10/11 (64비트) | `ActionMacro-<버전>-windows-x64-setup.exe` | `ActionMacro-<버전>-windows-x64-portable.zip` |
 
-- **macOS**: DMG를 열어 `ActionMacro`를 `Applications`로 끌어 놓거나, 포터블 zip을 풀어 `ActionMacro.app`을 실행합니다. 앱에 Apple 개발자 서명·공증이 없어서 처음 열 때 macOS가 막습니다 — **시스템 설정 → 개인정보 보호 및 보안** 아래쪽의 **그래도 열기**를 누르세요. 그다음 [권한](#-macos-필수-보안-권한-설정)을 `ActionMacro`에 허용합니다.
+- **macOS**: DMG를 열어 `ActionMacro`를 `Applications`로 끌어 놓거나, 포터블 zip을 풀어 `ActionMacro.app`을 원하는 폴더에 둡니다(DMG 안에서 바로 실행하지 않습니다). 앱에 Apple 개발자 서명·공증이 없어서 처음 열면 *"Apple could not verify “ActionMacro” is free of malware…"* 경고가 나오고 열리지 않습니다. 앱이 손상된 것은 아니며, 둘 중 하나로 한 번만 허용합니다.
+  - **시스템 설정에서**: 경고 창에서 **완료**를 누르고 **시스템 설정 → 개인정보 보호 및 보안** 맨 아래의 **그래도 열기**를 누른 뒤 암호로 확인합니다. 버튼은 방금 열려다 막힌 앱에만 한동안 보이므로, 안 보이면 앱을 한 번 더 열어 본 뒤 확인하세요.
+  - **터미널에서**: 인터넷에서 받은 파일에 붙는 격리 표시를 지웁니다(다른 폴더에 두었다면 경로를 바꿉니다).
+
+    ```bash
+    xattr -dr com.apple.quarantine /Applications/ActionMacro.app
+    ```
+
+  그다음 [권한](#-macos-필수-보안-권한-설정)을 `ActionMacro`에 허용합니다.
 - **Windows**: `setup.exe`는 기본으로 현재 사용자에게 설치합니다(관리자 권한 불필요). 포터블은 zip을 풀고 `ActionMacro.exe`를 실행합니다. 코드 서명이 없어 SmartScreen이 막으면 **추가 정보 → 실행**을 누르세요. 관리자 권한으로 도는 프로그램(일부 게임·에뮬레이터)에 입력하려면 ActionMacro도 관리자 권한으로 실행해야 합니다.
 - 받은 파일은 릴리스의 `SHA256SUMS.txt`로 확인할 수 있습니다.
 
