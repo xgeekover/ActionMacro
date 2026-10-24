@@ -42,3 +42,7 @@ ehthumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Real-device check reports (tools/)
+device_check_report.json*
+device_check_hotkeys_report.json

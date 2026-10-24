@@ -217,6 +217,16 @@ ActionMacro는 엄격한 멀티 에이전트 품질 게이트와 독립 포렌�
 - **마우스 타격 오차**: 1,000회 무작위 좌표 정밀도 검증 결과 평균 오차 $\le 0.5$px
 - **긴급 정지 지연시간**: 진행 중인 다중 클릭·길게 누르기 도중 정지해도 실행 스레드 종료·눌린 버튼/키 해제까지 50ms 이내, 정지 50ms 뒤부터 새 입력 0건 (실측: 스레드 종료 평균 약 1ms, 최대 약 2ms). 실제 `PynputAdapter` 경로에서 OS 컨트롤러만 가짜로 바꿔 검증: `tests/e2e/test_input_engine_integration.py`
 
+자동 테스트는 화면 없는 환경에서 OS 입력·캡처를 가짜로 바꿔 돌기 때문에, 실제 데스크톱에서만 생기는 문제는 잡지 못합니다.
+입력·단축키·좌표 피커·엔진 스레드를 고친 뒤에는 **실기기 점검**(`tools/`, macOS, 실제 마우스·키보드를 움직임)도 돌립니다 — 사용법·권한·안전 장치·기준선은 [`tools/README.md`](tools/README.md).
+
+```bash
+# 실기기 점검 (약 20초, 도는 동안 손을 뗍니다)
+.venv/bin/python tools/device_check_macos.py
+# 직접 Esc · Ctrl+Shift+S 를 눌러 긴급 정지 확인 (대화형)
+.venv/bin/python tools/device_check_hotkeys_macos.py
+```
+
 ```bash
 # 전체 테스트 실행 (헤드리스 Qt 환경)
 QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/
