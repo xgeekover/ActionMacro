@@ -331,7 +331,7 @@ class TestMalformedKeyCombinationsAndDelimiterPatterns:
             ("esc", ["esc"]),
             ("F11", ["f11"]),
             ("up", ["up"]),
-            ("ctrl+한글", ["ctrl", "한글"]),
+            ("ctrl+한", ["ctrl", "한"]),  # one character is a key; a word ("한글") is not
             ("+a+", ["a", "+"]),
             ("ctrl+", ["ctrl", "+"]),
         ],

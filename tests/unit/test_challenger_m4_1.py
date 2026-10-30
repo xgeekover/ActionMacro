@@ -477,10 +477,14 @@ class TestMalformedAndAdversarialInputs:
         )
         inspector.set_action(act)
 
-        # Unicode / Korean
+        # Unicode / Korean: one character is a key and is applied
+        inspector.form_key.edit_keys.setText("ctrl+한")
+        assert act.params.keys == ["ctrl", "한"]
+
+        # A word is no key name: the engine could not press it, so it is not applied
         inspector.form_key.edit_keys.setText("ctrl+한글")
-        # Should parse to ['ctrl', '한글']
-        assert act.params.keys == ["ctrl", "한글"]
+        assert act.params.keys == ["ctrl", "한"]
+        assert '"한글" is not a key name' in inspector.lbl_status.text()
 
         # Symbol '+' key via 'ctrl++'
         inspector.form_key.edit_keys.setText("ctrl++")

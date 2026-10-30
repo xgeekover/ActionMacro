@@ -611,9 +611,12 @@ class ExecutionEngine:
             elif act == "hotkey":
                 self.input_driver.hotkey(*chord, cancel_event=self.cancel_event)
             elif act == "type":
-                text = p.get("text", "")
+                # Types the text character by character; the keys are not pressed.
+                text = p.get("text") or ""
                 if hasattr(self.input_driver, "type_text"):
-                    self.input_driver.type_text(text, cancel_event=self.cancel_event)
+                    self.input_driver.type_text(
+                        text, cancel_event=self.cancel_event, pause_event=self.pause_event
+                    )
             return True
 
         elif act_type == ActionType.FIXED_WAIT:

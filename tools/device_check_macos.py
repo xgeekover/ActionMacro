@@ -19,6 +19,11 @@ started with ``start_async()`` on the GUI thread like ``MainWindow``):
 - the real ``MainWindow``: Start button -> click, with the real global hotkey listener;
 - key chords (shift+a, cmd_or_ctrl+a, down/up, legacy ``modifiers`` field), verified on
   the key events themselves, so a Korean/Japanese IME does not change the verdict;
+- a text step (``action: "type"``) types its text into the field exactly, Latin and
+  Korean text; judged on the field's text;
+- with ``--ime``: the same text steps while the Korean 2-Set input source is selected
+  (switched for the check and switched back to the original source afterwards); the
+  step must type the text as written and leave Korean 2-Set selected afterwards;
 - the coordinate picker on every display;
 - that the global hotkey listener's event tap is alive.
 
@@ -37,6 +42,8 @@ Safety:
 
 Permissions for the terminal app running it: Accessibility and Input Monitoring.
 
+``--text-only`` runs only the text-step checks (with ``--ime``, also the input-source one).
+
 Exit codes: 0 all steps passed or skipped, 1 a step failed, 3 watchdog. A crash shows up as
 133 (SIGTRAP: see ~/Library/Logs/DiagnosticReports/python3*.ips) or 139 (SIGSEGV: the
 faulthandler dump is written next to the report as ``<report>.crash.txt``).
@@ -45,6 +52,7 @@ faulthandler dump is written next to the report as ``<report>.crash.txt``).
 from __future__ import annotations
 
 import argparse
+import ctypes
 import faulthandler
 import json
 import os
@@ -99,6 +107,56 @@ def step(name: str, ok: Optional[bool], **detail: Any) -> None:
     mark = {True: "PASS", False: "FAIL", None: "SKIP"}[ok]
     print(f"[{mark}] {name} :: {json.dumps(detail, ensure_ascii=False, default=str)}", flush=True)
     save_report()
+
+
+# --------------------------------------------------------------------------- input sources (TIS)
+
+_CARBON = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/Carbon.framework/Carbon")
+_CF = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+for _name, _res, _args in (
+    ("TISCopyCurrentKeyboardInputSource", ctypes.c_void_p, []),
+    ("TISCreateInputSourceList", ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_bool]),
+    ("TISGetInputSourceProperty", ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_void_p]),
+    ("TISSelectInputSource", ctypes.c_int32, [ctypes.c_void_p]),
+):
+    getattr(_CARBON, _name).restype, getattr(_CARBON, _name).argtypes = _res, _args
+for _name, _res, _args in (
+    ("CFArrayGetCount", ctypes.c_long, [ctypes.c_void_p]),
+    ("CFArrayGetValueAtIndex", ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_long]),
+    ("CFRelease", None, [ctypes.c_void_p]),
+    ("CFStringGetCString", ctypes.c_bool, [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]),
+):
+    getattr(_CF, _name).restype, getattr(_CF, _name).argtypes = _res, _args
+_TIS_ID = ctypes.c_void_p.in_dll(_CARBON, "kTISPropertyInputSourceID")
+KOREAN_2SET = "com.apple.inputmethod.Korean.2SetKorean"
+
+
+def _source_id(source: int) -> str:
+    ref = _CARBON.TISGetInputSourceProperty(source, _TIS_ID)
+    buf = ctypes.create_string_buffer(512)
+    return buf.value.decode() if ref and _CF.CFStringGetCString(ref, buf, 512, 0x08000100) else ""
+
+
+def current_input_source() -> str:
+    """ID of the selected keyboard input source. Main thread only (HIToolbox)."""
+    source = _CARBON.TISCopyCurrentKeyboardInputSource()
+    try:
+        return _source_id(source)
+    finally:
+        _CF.CFRelease(source)
+
+
+def select_input_source(source_id: str) -> bool:
+    """Selects an enabled input source by ID. Main thread only (HIToolbox)."""
+    sources = _CARBON.TISCreateInputSourceList(None, False)
+    try:
+        for i in range(_CF.CFArrayGetCount(sources)):
+            source = _CF.CFArrayGetValueAtIndex(sources, i)
+            if _source_id(source) == source_id:
+                return _CARBON.TISSelectInputSource(source) == 0
+        return False
+    finally:
+        _CF.CFRelease(sources)
 
 
 # --------------------------------------------------------------------------- safety checks
@@ -622,6 +680,58 @@ def check_key_chords(kp: KeyPad) -> None:
            chord("shift", "d"))
 
 
+#: Typed by the text step: upper case, digits, a space and symbols that need Shift on a US layout.
+TYPED_TEXT = "Ab1 x_Y!@"
+#: Korean syllables, a Latin user name and digits in one text.
+TYPED_KOREAN = "안녕하세요 홍길동 id123"
+
+
+def type_into_keypad(kp: KeyPad, name: str, text: str, **detail: Any) -> None:
+    """Runs one text step into the cleared key pad and judges the field's text."""
+    if not keys_safe(kp) and not focus_keypad(kp):
+        return
+    gui(lambda: kp.edit.clear())
+    if not keys_safe(kp):
+        step(name, None, reason="focus left the key pad — key input skipped")
+        return
+    run(engine_for(ActionBlock(type=ActionType.KEY_INPUT,
+                               params=KeyInputParams(keys=[], action="type", text=text))))
+    time.sleep(0.4)
+    field = gui(lambda: kp.edit.text())
+    preedit = gui(lambda: kp.edit.inputMethodQuery(Qt.InputMethodQuery.ImSurroundingText))
+    # The step selects an ASCII input source while typing and must select the user's again.
+    source_after = gui(current_input_source)
+    restored = "input_source" not in detail or source_after == detail["input_source"]
+    step(name, field == text and restored, field_text=field, expected=text, surrounding_text=str(preedit),
+         source_after=source_after, shift_still_down=key_down(KC_SHIFT), **detail)
+
+
+def check_type_text(kp: KeyPad) -> None:
+    source = gui(current_input_source)
+    type_into_keypad(kp, f"text step types {TYPED_TEXT!r} into the field", TYPED_TEXT, input_source=source)
+    type_into_keypad(kp, f"text step types {TYPED_KOREAN!r} into the field", TYPED_KOREAN, input_source=source)
+
+
+def check_type_text_korean_ime(kp: KeyPad) -> None:
+    """The text steps again while the Korean 2-Set input source is selected; restores the source."""
+    original = gui(current_input_source)
+    if not gui(lambda: select_input_source(KOREAN_2SET)):
+        step("text step with Korean 2-Set selected", None, reason=f"{KOREAN_2SET} is not enabled",
+             original_source=original)
+        return
+    try:
+        if not wait_until(lambda: gui(current_input_source) == KOREAN_2SET, 2.0, 0.05):
+            step("text step with Korean 2-Set selected", None, reason="input source did not switch",
+                 current=gui(current_input_source))
+            return
+        for text in ("myid123", TYPED_TEXT, TYPED_KOREAN):
+            type_into_keypad(kp, f"[Korean 2-Set] text step types {text!r}", text, input_source=KOREAN_2SET)
+    finally:
+        gui(lambda: select_input_source(original))
+        restored = wait_until(lambda: gui(current_input_source) == original, 2.0, 0.05)
+        step("input source restored", restored, original=original, current=gui(current_input_source))
+
+
 def stop_during_key_hold(kp: KeyPad, hold_ms: int = 3000, pause_s: float = 0.2) -> Dict[str, Any]:
     """Stops a 'shift+e' hold and returns the key timeline relative to stop()."""
     n = TAP.mark()
@@ -722,7 +832,7 @@ def check_listener_health() -> None:
 # --------------------------------------------------------------------------- main
 
 def controller(app: QApplication, pad: ClickTarget, kp: KeyPad, start_pos: Tuple[int, int],
-               stop_key_trials: int) -> None:
+               stop_key_trials: int, text_only: bool = False, ime: bool = False) -> None:
     def guarded(check: Callable[..., None], *args: Any) -> None:
         try:
             check(*args)
@@ -735,12 +845,19 @@ def controller(app: QApplication, pad: ClickTarget, kp: KeyPad, start_pos: Tuple
         if stop_key_trials:
             guarded(repeat_stop_key_hold, kp, stop_key_trials)
             return
+        if text_only:
+            guarded(check_type_text, kp)
+            if ime:
+                guarded(check_type_text_korean_ime, kp)
+            return
         for check in (check_click_precision, check_double_click, check_stop_multi_click,
                       check_stop_long_click_hold, check_real_app_end_to_end):
             guarded(check, pad)
         gui(lambda: pad.hide())
-        for check in (check_key_chords, check_stop_long_key_hold):
+        for check in (check_key_chords, check_type_text, check_stop_long_key_hold):
             guarded(check, kp)
+        if ime:
+            guarded(check_type_text_korean_ime, kp)
         gui(lambda: kp.hide())
         guarded(check_picker)
         guarded(check_listener_health)
@@ -762,6 +879,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--timeout", type=float, default=120.0, help="watchdog seconds (releases inputs, exits 3)")
     parser.add_argument("--stop-key-trials", type=int, default=0, metavar="N",
                         help="only repeat the stop-during-key-hold check N times")
+    parser.add_argument("--text-only", action="store_true", help="only the text-step checks")
+    parser.add_argument("--ime", action="store_true",
+                        help="also type with the Korean 2-Set input source selected (restored afterwards)")
     args = parser.parse_args(argv)
     REPORT_PATH = args.report
     faulthandler.enable(open(REPORT_PATH + ".crash.txt", "w"), all_threads=True)
@@ -786,7 +906,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     TAP.start()
     threading.Thread(target=watchdog, daemon=True).start()
-    threading.Thread(target=controller, args=(app, pad, kp, start_pos, args.stop_key_trials), daemon=True).start()
+    threading.Thread(target=controller, args=(app, pad, kp, start_pos, args.stop_key_trials, args.text_only, args.ime),
+                     daemon=True).start()
     app.exec()
     save_report()
     fails = [s for s in REPORT["steps"] if s["ok"] is False]

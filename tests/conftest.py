@@ -99,6 +99,45 @@ def _no_real_permission_queries():
     assert not calls, f"real macOS permission bindings were called: {calls}"
 
 
+#: Real input-source switches a test tried to make (see the guard below).
+_BLOCKED_INPUT_SOURCE_CALLS: list = []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _macos_input_source_guard():
+    """Session-wide: no test switches this Mac's real keyboard input source.
+
+    A text step selects an ASCII input source while it types (macos_input_source). The
+    two calls that change the selection are replaced by guards that record the call and
+    raise; ascii_input_source() then types without switching, and the fixture below fails
+    the test. Tests of the module patch these functions themselves.
+    """
+    from action_macro.engine import macos_input_source
+
+    def _guard(name: str):
+        def _blocked(*_args, **_kwargs):
+            _BLOCKED_INPUT_SOURCE_CALLS.append(name)
+            raise RuntimeError(f"tests must not switch the real input source ({name})")
+
+        return _blocked
+
+    patcher = pytest.MonkeyPatch()
+    for name in ("_select_ascii_capable", "_restore"):
+        patcher.setattr(macos_input_source, name, _guard(name))
+    yield
+    patcher.undo()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_input_source_switch():
+    """Fails the test that tried to switch the real input source (recorded by the guard above)."""
+    _BLOCKED_INPUT_SOURCE_CALLS.clear()
+    yield
+    calls = list(_BLOCKED_INPUT_SOURCE_CALLS)
+    _BLOCKED_INPUT_SOURCE_CALLS.clear()
+    assert not calls, f"the real keyboard input source was switched: {calls}"
+
+
 @pytest.fixture(autouse=True)
 def _macos_permissions_all_granted(monkeypatch):
     """Makes the default macOS permission checker report every permission as granted.

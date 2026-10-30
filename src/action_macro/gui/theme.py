@@ -813,6 +813,8 @@ QLabel[role="field"] { color: $text; font-size: ${font_body}px; font-weight: 500
 QLabel[role="field"]:disabled { color: $text_faint; }
 QLabel[role="help"] { color: $text_muted; font-size: ${font_small}px; }
 QLabel[role="help"]:disabled { color: $text_faint; }
+QLabel[role="help"][tone="warning"] { color: $warning; }
+QLabel[role="help"][tone="danger"] { color: $danger; }
 QLabel[role="chord"] {
     background-color: $surface_3;
     border: 1px solid $border_strong;

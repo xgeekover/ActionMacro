@@ -12,11 +12,14 @@ emitted and anything already held by the call is released before it returns.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple, Union, runtime_checkable
+from typing import (
+    Any, Callable, ContextManager, Dict, List, Optional, Protocol, Set, Tuple, Union, runtime_checkable,
+)
 
 from action_macro.core.key_mapping import (
     normalize_key_name,
@@ -32,6 +35,66 @@ logger = logging.getLogger(__name__)
 def _is_cancelled(cancel_event: Optional[threading.Event]) -> bool:
     """Returns True if an optional cancellation event has been set."""
     return cancel_event is not None and cancel_event.is_set()
+
+
+#: Characters typed as their key (Enter, Tab) instead of as text.
+_TYPED_AS_KEYS = frozenset("\n\r\t")
+
+
+def _wait_while_paused(pause_event: Optional[threading.Event], cancel_event: Optional[threading.Event]) -> bool:
+    """Blocks while ``pause_event`` is set. Returns False once ``cancel_event`` is set."""
+    while pause_event is not None and pause_event.is_set():
+        if _is_cancelled(cancel_event):
+            return False
+        time.sleep(0.01)
+    return not _is_cancelled(cancel_event)
+
+
+def utf16_code_units(char: str) -> List[int]:
+    """UTF-16 code units of ``char``: one, or two surrogates outside the BMP (emoji)."""
+    data = char.encode("utf-16-le")
+    return [int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data), 2)]
+
+
+def make_win32_unicode_sender(send_input: Optional[Callable[[int, Any, int], int]] = None) -> Callable[[str], None]:
+    """Returns a function that types one character on Windows as Unicode packets.
+
+    ``SendInput`` with ``KEYEVENTF_UNICODE`` delivers the character itself (as a
+    ``VK_PACKET`` keystroke) instead of the key that produces it on the current
+    layout. pynput's ``type`` sends that layout key for most characters, so the
+    result follows the keyboard state: with Caps Lock on, "id" comes out as "ID", and
+    an IME in native mode (the Korean IME in Hangul mode) may turn the letters into
+    its own script. Imported lazily: pynput's win32 helpers load user32 at import time.
+
+    ``send_input`` replaces ``user32.SendInput`` (the self-test builds the events
+    without sending them).
+    """
+    import ctypes
+
+    from pynput._util import win32
+
+    INPUT, INPUT_union, KEYBDINPUT = win32.INPUT, win32.INPUT_union, win32.KEYBDINPUT
+    deliver = send_input if send_input is not None else win32.SendInput
+
+    def send(char: str) -> None:
+        units = utf16_code_units(char)
+        events = [
+            INPUT(
+                type=INPUT.KEYBOARD,
+                value=INPUT_union(ki=KEYBDINPUT(wVk=0, wScan=unit, dwFlags=KEYBDINPUT.UNICODE | state)),
+            )
+            for state in (0, KEYBDINPUT.KEYUP)
+            for unit in units
+        ]
+        sent = deliver(len(events), (INPUT * len(events))(*events), ctypes.sizeof(INPUT))
+        if sent != len(events):
+            # The character is left out on purpose: the text may be private.
+            raise OSError(
+                f"Windows accepted {sent} of {len(events)} input events while typing text "
+                "(input to this window may be blocked)"
+            )
+
+    return send
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +187,9 @@ class InputAdapterProtocol(Protocol):
         text: str,
         interval: float = 0.02,
         cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
     ) -> None:
-        """Types unicode or ASCII text string."""
+        """Types unicode or ASCII text string; waits while ``pause_event`` is set."""
         ...
 
     def safety_flush(self) -> None:
@@ -149,8 +213,14 @@ class PynputAdapter:
         mouse_controller: Optional[Any] = None,
         keyboard_controller: Optional[Any] = None,
         platform_name: Optional[str] = None,
+        text_sender: Optional[Callable[[str], None]] = None,
+        text_input_scope: Optional[Callable[[], ContextManager[Any]]] = None,
     ) -> None:
         self._platform = (platform_name or sys.platform).lower()
+        # Types one character of type_text(); None types through the keyboard controller.
+        self._text_sender = text_sender
+        # Entered around type_text(); macOS selects an ASCII input source in it.
+        self._text_input_scope: Callable[[], ContextManager[Any]] = text_input_scope or contextlib.nullcontext
         self._active_buttons: Set[str] = set()
         self._active_keys: Set[str] = set()
         self._active_pynput_keys: Dict[str, Any] = {}
@@ -176,6 +246,15 @@ class PynputAdapter:
             except Exception as err:
                 logger.warning("Could not initialize native pynput KeyboardController: %s", err)
                 self._keyboard = None
+            if text_sender is None and self._keyboard is not None and sys.platform == "win32":
+                try:
+                    self._text_sender = make_win32_unicode_sender()
+                except Exception as err:
+                    logger.warning("Typing text falls back to layout keys: %s", err)
+            if text_input_scope is None and self._keyboard is not None and sys.platform == "darwin":
+                from action_macro.engine.macos_input_source import ascii_input_source
+
+                self._text_input_scope = ascii_input_source
 
     # -------------------------------------------------------------------------
     # Internal Button Helpers
@@ -431,20 +510,33 @@ class PynputAdapter:
         text: str,
         interval: float = 0.02,
         cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
     ) -> None:
-        """Types unicode or ASCII text string, stopping early once ``cancel_event`` is set."""
+        """Types ``text`` one character at a time, ``interval`` seconds apart.
+
+        Waits while ``pause_event`` is set and stops before the next character once
+        ``cancel_event`` is set. On Windows each character is sent as a Unicode packet
+        (see :func:`make_win32_unicode_sender`); line breaks and tabs, and every
+        character elsewhere, go through pynput's ``type`` (Enter and Tab keys, the
+        layout's keys on macOS, typed with an ASCII input source selected: see
+        :mod:`action_macro.engine.macos_input_source`). A Windows line break (CR LF) is
+        one Enter.
+        """
         self._check_controllers()
-        if _is_cancelled(cancel_event):
+        text = text.replace("\r\n", "\n")
+        if not text or _is_cancelled(cancel_event):
             return
-        if interval > 0.0:
-            for ch in text:
-                if _is_cancelled(cancel_event):
+        with self._text_input_scope():
+            for index, char in enumerate(text):
+                if not _wait_while_paused(pause_event, cancel_event):
                     return
-                self._keyboard.type(ch)
-                if not WaitSystem.wait(interval, cancel_event=cancel_event):
-                    return
-        else:
-            self._keyboard.type(text)
+                if self._text_sender is not None and char not in _TYPED_AS_KEYS:
+                    self._text_sender(char)
+                else:
+                    self._keyboard.type(char)
+                if interval > 0.0 and index < len(text) - 1:
+                    if not WaitSystem.wait(interval, cancel_event=cancel_event, pause_event=pause_event):
+                        return
 
     # -------------------------------------------------------------------------
     # Safety Flush & State Inspection

@@ -10,7 +10,7 @@ small-caps sections with the label above each input; numeric inputs take half
 the panel width, text inputs and segmented controls the full width.
 
 Small enums are shown as segmented controls that mirror hidden combo boxes. The
-combos (``combo_button``, ``combo_action``, ``combo_mode``,
+combos (``combo_button``, ``combo_action``, ``combo_kind``, ``combo_mode``,
 ``combo_timeout_action``) stay the source of truth, so code and tests can keep
 using ``setCurrentText``/``setCurrentIndex``.
 
@@ -23,8 +23,9 @@ and ``invalid`` (⚠, the edit is not applied).
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
 
 from PySide6.QtCore import QMimeData, QSize, Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QPixmap, QValidator
@@ -52,6 +53,7 @@ from PySide6.QtWidgets import (
 from action_macro.core.key_mapping import (
     build_key_chord,
     format_key_combo,
+    is_valid_key,
     parse_key_combo,
 )
 from action_macro.core.models import (
@@ -91,6 +93,19 @@ COORD_HELP = (
     "or above the main one."
 )
 KEYS_HELP = "Join keys with + to press them together, e.g. ctrl+c or cmd_or_ctrl+shift+t."
+TEXT_HELP = (
+    "Typed one character at a time into the window that has the keyboard focus. Click "
+    "the input box first, e.g. with a Mouse click step before this one."
+)
+TEXT_HELP_MACOS = (
+    " On macOS the input source switches to ABC while the text is typed (so an input "
+    "method such as Korean does not change the letters) and back afterwards."
+)
+TEXT_WARNING = "Saved in the scenario file as plain text. Don't use it for passwords."
+#: Shown under the text while it holds a line break (e.g. pasted from a spreadsheet cell).
+TEXT_BREAKS_HELP = "The text contains a line break: it is typed as Enter (⏎ on the card)."
+#: Shown under Keys (and in the validation line) for a word that is no key name.
+UNKNOWN_KEY_HELP = '"{key}" is not a key name. To type text, choose Text under Send.'
 CONFIDENCE_HELP = (
     "How closely the screen must match the image. Lower it when the image is not "
     "found; raise it when a wrong spot matches."
@@ -120,6 +135,13 @@ TEMPLATE_WARNINGS = {
     "missing": "⚠ Image file not found. The step fails when it runs unless the file is there.",
     "invalid": "⚠ This file is not a readable image. The step fails when it runs.",
 }
+
+
+def text_help(platform_name: Optional[str] = None) -> str:
+    """Help under "Text to type"; on macOS it adds that the input source switches to ABC
+    while typing (see action_macro.engine.macos_input_source)."""
+    darwin = (platform_name or sys.platform) == "darwin"
+    return TEXT_HELP + (TEXT_HELP_MACOS if darwin else "")
 
 
 # -----------------------------------------------------------------------------
@@ -406,8 +428,20 @@ class KeyInputForm(_FormPage):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(_SECTION_GAP)
 
+        # What the step sends: a key or shortcut, or text typed character by character
+        send = _Section("Send")
+        self.combo_kind = _hidden_combo(send, ["keys", "text"])
+        self.seg_kind = SegmentedControl([
+            ("keys", "Key or shortcut", "Press a key or a shortcut, e.g. enter or ctrl+c."),
+            ("text", "Text", "Type text one character at a time, e.g. a user name."),
+        ])
+        self.seg_kind.bind_combo(self.combo_kind)
+        send.add_row(self.seg_kind)
+        layout.addWidget(send)
+
         # Keys
         keys = _Section("Keys")
+        self.section_keys = keys
         self.edit_keys = QLineEdit()
         self.edit_keys.setPlaceholderText("e.g. enter, a or ctrl+c")
         self.edit_keys.setToolTip(
@@ -469,8 +503,27 @@ class KeyInputForm(_FormPage):
         keys.add_row(_field("Build a shortcut", builder))
         layout.addWidget(keys)
 
+        # Text (Send: Text)
+        self.section_text = _Section("Text")
+        self.edit_text = QLineEdit()
+        self.edit_text.setPlaceholderText("e.g. myid123")
+        self.edit_text.setToolTip(
+            "Typed one character at a time into the window that has the keyboard focus."
+        )
+        self.edit_text.textChanged.connect(self._on_changed)
+        self.lbl_text_help = _help_label(text_help())
+        self.lbl_text_breaks = _help_label(TEXT_BREAKS_HELP)
+        self.lbl_text_breaks.setProperty("tone", "warning")
+        self.lbl_text_warning = _help_label(TEXT_WARNING)
+        self.lbl_text_warning.setProperty("tone", "warning")
+        self.section_text.add_row(_field("Text to type", self.edit_text, self.lbl_text_help))
+        self.section_text.add_row(self.lbl_text_breaks, gap=theme.SPACE_XS + 2)
+        self.section_text.add_row(self.lbl_text_warning, gap=theme.SPACE_XS + 2)
+        layout.addWidget(self.section_text)
+
         # Behaviour
         behaviour = _Section("Behavior")
+        self.section_behaviour = behaviour
         self.combo_action = _hidden_combo(behaviour, ["press", "down", "up"])
         self.combo_action.setToolTip(
             "press: tap the key or shortcut once.\n"
@@ -495,6 +548,10 @@ class KeyInputForm(_FormPage):
         behaviour.add_row(_field(self.lbl_duration, _pair(self.spin_duration), self.lbl_duration_help))
         layout.addWidget(behaviour)
         layout.addStretch()
+
+        self.combo_kind.currentIndexChanged.connect(self._sync_kind)
+        self.combo_kind.currentIndexChanged.connect(self._on_changed)
+        self._sync_kind()
         self._update_preview()
 
     def _apply_combo_helper(self) -> None:
@@ -514,9 +571,14 @@ class KeyInputForm(_FormPage):
     def set_values(self, params: Any) -> None:
         self._block_signals = True
         act_str = str(params.get("action", "press")).lower()
+        is_text = act_str == "type"
         idx = self.combo_action.findText(act_str)
         if idx >= 0:
             self.combo_action.setCurrentIndex(idx)
+        elif is_text:
+            self.combo_action.setCurrentIndex(0)  # Press, if the step is switched back to keys
+        self.combo_kind.setCurrentText("text" if is_text else "keys")
+        self.edit_text.setText(str(params.get("text") or ""))
 
         # A saved ``modifiers`` field is shown in front of the keys as one combo. The
         # engine runs modifiers + keys as one chord, so saving the combo back as keys
@@ -534,28 +596,80 @@ class KeyInputForm(_FormPage):
         raw_text = self.edit_keys.text().strip()
         return parse_key_combo(raw_text)
 
+    def is_text_mode(self) -> bool:
+        """True when the step types text (Send: Text) instead of pressing keys."""
+        return self.combo_kind.currentText() == "text"
+
+    def validation_error(self) -> Optional[Tuple[str, QWidget]]:
+        """Why the form cannot be applied, as (message, field to mark), or None if it can.
+
+        A key name the engine cannot press (e.g. a user name typed into Keys) is an
+        error here rather than a failure when the scenario runs.
+        """
+        if self.is_text_mode():
+            if not self.edit_text.text():
+                return "Enter the text to type", self.edit_text
+            return None
+        keys = self.get_parsed_keys()
+        if not keys:
+            return "Invalid key combination (e.g. ctrl+c or enter)", self.edit_keys
+        unknown = self._unknown_keys(keys)
+        if unknown:
+            return UNKNOWN_KEY_HELP.format(key=unknown[0]), self.edit_keys
+        return None
+
+    @staticmethod
+    def _unknown_keys(keys: List[str]) -> List[str]:
+        """The names in ``keys`` the engine cannot press (neither a key name nor one character)."""
+        return [key for key in keys if not is_valid_key(key)]
+
     def is_valid(self) -> bool:
-        """Return True if the keys input parses to a non-empty list."""
-        return len(self.get_parsed_keys()) > 0
+        """Return True if the step can be applied: known key names, or text to type."""
+        return self.validation_error() is None
 
     def get_values(self) -> Optional[KeyInputParams]:
         parsed_keys = self.get_parsed_keys()
+        text = self.edit_text.text()
+        if self.is_text_mode():
+            if not text:
+                return None
+            # The keys are kept (not pressed) so switching back to keys restores them.
+            return KeyInputParams(
+                keys=parsed_keys,
+                action="type",
+                text=text,
+                press_duration_ms=self.spin_duration.value(),
+            )
         if not parsed_keys:
             return None
         return KeyInputParams(
             keys=parsed_keys,
             action=self.combo_action.currentText(),
             press_duration_ms=self.spin_duration.value(),
+            text=text or None,
         )
 
     def _update_preview(self) -> None:
         keys = self.get_parsed_keys()
-        if keys:
+        unknown = self._unknown_keys(keys)
+        if keys and not unknown:
             self.lbl_human.setText(format_key_combo(keys))
             self.lbl_human.show()
-        else:
+        else:  # a word such as "myid123" would read like a key in the chip
             self.lbl_human.setText("")
             self.lbl_human.hide()
+        # The help line under Keys explains a word that is no key, right where it is typed.
+        self.lbl_keys_help.setText(UNKNOWN_KEY_HELP.format(key=unknown[0]) if unknown else KEYS_HELP)
+        theme.set_style_prop(self.lbl_keys_help, "tone", "danger" if unknown else "")
+        # Pasted line breaks are invisible in the one-line field but are typed as Enter.
+        text = self.edit_text.text()
+        self.lbl_text_breaks.setVisible("\n" in text or "\r" in text)
+
+    def _sync_kind(self, *_args: object) -> None:
+        text_mode = self.is_text_mode()
+        self.section_keys.setVisible(not text_mode)
+        self.section_behaviour.setVisible(not text_mode)
+        self.section_text.setVisible(text_mode)
 
     def _sync_duration_enabled(self, *_args: object) -> None:
         enabled = self.combo_action.currentText() == "press"
@@ -1395,14 +1509,12 @@ class PropertyInspector(QWidget):
                 # Saved as typed (the file may be added later), but a run would fail now.
                 warning = TEMPLATE_WARNINGS.get(self.form_image.preview_state(), "")
         elif act_type == ActionType.KEY_INPUT:
-            keys = self.form_key.edit_keys.text().strip()
-            parsed_keys = parse_key_combo(keys)
-            if not parsed_keys:
+            error = self.form_key.validation_error()
+            if error is not None:
                 valid = False
-                err_msg = "Invalid key combination (e.g. ctrl+c or enter)"
-                invalid_field = self.form_key.edit_keys
+                err_msg, invalid_field = error
 
-        for field in (self.form_image.edit_path, self.form_key.edit_keys):
+        for field in (self.form_image.edit_path, self.form_key.edit_keys, self.form_key.edit_text):
             theme.set_style_prop(field, "state", "invalid" if field is invalid_field else "")
 
         if valid and warning:

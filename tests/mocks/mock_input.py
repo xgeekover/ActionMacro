@@ -198,6 +198,7 @@ class MockInputDriver:
         text: str,
         interval: float = 0.02,
         cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
     ) -> None:
         """Types a string of text character by character or via paste simulation.
 

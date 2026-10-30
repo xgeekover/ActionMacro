@@ -12,6 +12,7 @@ scenario top to bottom without opening the inspector::
     Press ⌘ + C                (Ctrl + C on Windows and Linux)
     Hold down ⇧                (Shift)
     Release ⇧
+    Type "myid123"
     Wait 1.0 s
     Wait until quest_button.png appears · timeout 10 s
     Wait until loading.png disappears · skip after 5 s
@@ -42,6 +43,9 @@ DETAIL_SEPARATOR = " · "
 DISABLED_PREFIX = "Disabled"
 #: Former name of :data:`DISABLED_PREFIX`.
 SKIPPED_PREFIX = DISABLED_PREFIX
+
+#: Longest text a "Type" summary quotes in full; longer text ends with "…".
+TYPED_TEXT_MAX_CHARS = 32
 
 #: Template path a new image-wait step starts with. The model needs a non-empty path,
 #: so this placeholder stands for "no image chosen yet" while the file does not exist.
@@ -129,12 +133,22 @@ def key_chord_display(params: Any, platform_name: Optional[str] = None) -> str:
     return format_key_combo([str(key) for key in chord], platform_name) if chord else ""
 
 
+def typed_text_display(text: str, max_chars: int = TYPED_TEXT_MAX_CHARS) -> str:
+    """``text`` on one line for a summary: Enter and Tab as ⏎ and ⇥, cut to ``max_chars``."""
+    flat = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "⏎").replace("\t", "⇥")
+    return flat if len(flat) <= max_chars else flat[: max_chars - 1] + "…"
+
+
 def key_summary(params: Any) -> str:
-    """``Press ⌘ + C``, ``Hold down ⇧`` or ``Release ⇧`` (``Ctrl + C`` / ``Shift`` off macOS)."""
+    """``Press ⌘ + C``, ``Hold down ⇧`` or ``Release ⇧`` (``Ctrl + C`` / ``Shift`` off macOS),
+    or ``Type "myid123"`` for a step that types text."""
+    mode = str(_param(params, "action", "press") or "press").strip().lower()
+    if mode == "type":
+        text = str(_param(params, "text", "") or "")
+        return f'Type "{typed_text_display(text)}"' if text else "No text set"
     chord = key_chord_display(params)
     if not chord:
         return "No key set"
-    mode = str(_param(params, "action", "press") or "press").strip().lower()
     verb = {"down": "Hold down", "up": "Release"}.get(mode, "Press")
     return f"{verb} {chord}"
 

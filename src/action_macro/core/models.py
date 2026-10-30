@@ -86,10 +86,11 @@ class MouseButton(str, Enum):
 
 
 class KeyAction(str, Enum):
-    """Supported keyboard action modes."""
+    """Supported keyboard action modes (``type`` types ``KeyInputParams.text``)."""
     PRESS = "press"
     DOWN = "down"
     UP = "up"
+    TYPE = "type"
 
     @classmethod
     def _missing_(cls, value: object):
@@ -229,17 +230,21 @@ class MouseClickParams(_ParamBase):
 
 @dataclass
 class KeyInputParams(_ParamBase):
-    """Parameters for KEY_INPUT action."""
-    keys: List[str]
+    """Parameters for KEY_INPUT action.
+
+    ``press``/``down``/``up`` act on the key chord in ``keys``. ``type`` types ``text``
+    character by character instead; ``keys`` may then be empty (a non-empty list is
+    kept, so switching the step back to a key mode restores it).
+    """
+    keys: List[str] = field(default_factory=list)
     action: str = "press"
     modifiers: Optional[List[str]] = None
     press_duration_ms: int = 50
+    text: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.keys, list):
             raise TypeError(f"KeyInputParams.keys must be a list, got {type(self.keys).__name__}")
-        if len(self.keys) == 0:
-            raise ValueError(f"KeyInputParams.keys must be a non-empty list of strings, got {self.keys!r}")
 
         normalized_keys: List[str] = []
         for k in self.keys:
@@ -256,9 +261,24 @@ class KeyInputParams(_ParamBase):
             raise TypeError(f"KeyInputParams.action must be a string, got {type(self.action).__name__}")
 
         act_lower = self.action.strip().lower()
-        if act_lower not in ("press", "down", "up"):
-            raise ValueError(f"KeyInputParams.action must be 'press', 'down', or 'up', got {self.action!r}")
+        if act_lower not in ("press", "down", "up", "type"):
+            raise ValueError(
+                f"KeyInputParams.action must be 'press', 'down', 'up' or 'type', got {self.action!r}"
+            )
         self.action = act_lower
+
+        if act_lower == "type":
+            if not isinstance(self.text, str):
+                raise TypeError(
+                    f"KeyInputParams.text must be a string in 'type' mode, got {type(self.text).__name__}"
+                )
+            if not self.text:
+                raise ValueError("KeyInputParams.text must be a non-empty string in 'type' mode")
+        else:
+            if len(self.keys) == 0:
+                raise ValueError(f"KeyInputParams.keys must be a non-empty list of strings, got {self.keys!r}")
+            if self.text is not None and not isinstance(self.text, str):
+                raise TypeError(f"KeyInputParams.text must be a string, got {type(self.text).__name__}")
 
         if self.modifiers is not None:
             if not isinstance(self.modifiers, list):
@@ -271,6 +291,14 @@ class KeyInputParams(_ParamBase):
             raise TypeError(f"KeyInputParams.press_duration_ms must be an int, got {type(self.press_duration_ms).__name__}")
         if self.press_duration_ms < 0:
             raise ValueError(f"KeyInputParams.press_duration_ms must be an integer >= 0, got {self.press_duration_ms!r}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        # Only 'type' steps store text, so the other key steps are written exactly as
+        # before and stay readable by versions without the 'type' mode.
+        if self.action != "type":
+            d.pop("text", None)
+        return d
 
 
 @dataclass

@@ -54,6 +54,17 @@ def _check_input_backends() -> Dict[str, Any]:
     expected = {"darwin": "_darwin", "win32": "_win32"}.get(sys.platform)
     if expected and not all(name.endswith(expected) for name in names.values()):
         raise RuntimeError(f"unexpected pynput back ends: {names}")
+    if sys.platform == "win32":
+        # Text steps type through SendInput with pynput's win32 structures. Build the
+        # events for one character (a surrogate pair) and hand them to a stub, not to
+        # SendInput, so nothing is typed.
+        from action_macro.engine.input_adapter import make_win32_unicode_sender
+
+        built: List[int] = []
+        make_win32_unicode_sender(send_input=lambda count, _events, _size: built.append(count) or count)("😀")
+        if built != [4]:
+            raise RuntimeError(f"unexpected Unicode input events: {built}")
+        names["text"] = "unicode packets"
     return names
 
 
@@ -67,6 +78,12 @@ def _check_keyboard_layout() -> Dict[str, Any]:
     from action_macro.engine.macos_keyboard import refresh_keyboard_layout_cache
 
     refresh_keyboard_layout_cache()
+    if sys.platform == "darwin":
+        # Text steps switch to an ASCII input source through these bindings; reading
+        # the current source loads them without changing anything.
+        from action_macro.engine import macos_input_source
+
+        return {"input_source": macos_input_source.current_source_id()}
     return {}
 
 
