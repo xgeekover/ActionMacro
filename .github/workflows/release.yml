@@ -1,8 +1,8 @@
 name: Release
 
 # Pushing a tag vX.Y.Z builds the installer and portable packages on macOS (Apple
-# Silicon, Intel) and Windows, self-tests each packaged app, and creates a DRAFT
-# GitHub release with all files and SHA-256 checksums. Publish the draft after
+# Silicon) and Windows, self-tests each packaged app, and creates a DRAFT GitHub
+# release with all files and SHA-256 checksums. Publish the draft after
 # checking it. "Run workflow" (manual) builds and uploads the packages as workflow
 # artifacts only, without a release.
 
@@ -28,8 +28,6 @@ jobs:
         include:
           - os: macos-15
             label: macos-arm64
-          - os: macos-15-intel
-            label: macos-x64
           - os: windows-latest
             label: windows-x64
     steps:

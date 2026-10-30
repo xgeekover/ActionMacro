@@ -86,7 +86,6 @@ Python 없이 바로 쓰려면 [Releases](https://github.com/xgeekover/ActionMac
 | OS | 설치본 | 포터블 (설치 없이 실행) |
 |---|---|---|
 | macOS · Apple Silicon (M1 이후) | `ActionMacro-<버전>-macos-arm64.dmg` | `ActionMacro-<버전>-macos-arm64-portable.zip` |
-| macOS · Intel | `ActionMacro-<버전>-macos-x64.dmg` | `ActionMacro-<버전>-macos-x64-portable.zip` |
 | Windows 10/11 (64비트) | `ActionMacro-<버전>-windows-x64-setup.exe` | `ActionMacro-<버전>-windows-x64-portable.zip` |
 
 - **macOS**: DMG를 열어 `ActionMacro`를 `Applications`로 끌어 놓거나, 포터블 zip을 풀어 `ActionMacro.app`을 원하는 폴더에 둡니다(DMG 안에서 바로 실행하지 않습니다). 앱에 Apple 개발자 서명·공증이 없어서 처음 열면 *"Apple could not verify “ActionMacro” is free of malware…"* 경고가 나오고 열리지 않습니다. 앱이 손상된 것은 아니며, 둘 중 하나로 한 번만 허용합니다.
@@ -100,6 +99,7 @@ Python 없이 바로 쓰려면 [Releases](https://github.com/xgeekover/ActionMac
   그다음 [권한](#-macos-필수-보안-권한-설정)을 `ActionMacro`에 허용합니다.
 - **Windows**: `setup.exe`는 기본으로 현재 사용자에게 설치합니다(관리자 권한 불필요). 포터블은 zip을 풀고 `ActionMacro.exe`를 실행합니다. 코드 서명이 없어 SmartScreen이 막으면 **추가 정보 → 실행**을 누르세요. 관리자 권한으로 도는 프로그램(일부 게임·에뮬레이터)에 입력하려면 ActionMacro도 관리자 권한으로 실행해야 합니다.
 - 받은 파일은 릴리스의 `SHA256SUMS.txt`로 확인할 수 있습니다.
+- Intel Mac 패키지는 0.1.0까지만 있습니다. 그 뒤 버전은 [소스에서 설치](#-설치-및-요구사항-installation--requirements)해 실행합니다.
 
 패키지는 태그(`vX.Y.Z`)를 올리면 GitHub Actions(`.github/workflows/release.yml`)가 macOS·Windows에서 빌드하고, 각 패키지를 자체 점검(`ActionMacro --self-test`)한 뒤 초안 릴리스로 올립니다. 직접 만들려면 PyInstaller를 설치한 환경에서 `python packaging/build_release.py`를 실행합니다(결과: `dist/release/`).
 
