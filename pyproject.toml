@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ActionMacro"
-version = "0.1.0"
+version = "0.1.1"
 description = "ActionMacro: Cross-platform precision desktop automation tool"
 requires-python = ">=3.10"
 license = { text = "MIT" }
