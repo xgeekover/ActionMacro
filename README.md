@@ -270,7 +270,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/
 QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/unit/
 ```
 
-main 에 올리거나 PR 을 열면 GitHub Actions(`.github/workflows/tests.yml`)가 같은 테스트를 macOS(Apple Silicon)와 Windows 에서 돌립니다. offscreen 에서 드러나지 않는 레이아웃·글꼴 검사는 실제 Qt 플러그인(`cocoa`, `windows`)으로 한 번 더 돌립니다.
+main 에 올리거나 PR 을 열면 GitHub Actions(`.github/workflows/tests.yml`)가 같은 테스트를 macOS(Apple Silicon)와 Windows 에서 돌립니다. offscreen 에서 드러나지 않는 레이아웃·글꼴 검사는 실제 Qt 플러그인(`cocoa`, `windows`)으로 한 번 더 돌립니다. 공유 러너는 스레드가 늦게 깨어나 정지 지연 검사가 가끔 기준을 넘기므로, 실패한 테스트만 한 번 다시 돌리고 다시 돌려서 통과한 테스트는 경고로 남깁니다.
 
 ---
 

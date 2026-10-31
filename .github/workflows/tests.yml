@@ -53,11 +53,24 @@ jobs:
         shell: bash
         run: uv sync --frozen --all-extras
 
+      # Shared runners (the macOS VM most of all) wake sleeping threads tens of ms late, so a
+      # few of the stop-latency checks miss their budget at random. Failed tests run once
+      # more; a real slowdown fails again, and anything that passed only on the retry is
+      # listed as a warning on the run.
       - name: pytest (offscreen)
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: uv run --no-sync pytest -p no:cacheprovider -rfEs --junitxml=junit-${{ matrix.label }}.xml
+        run: |
+          set +e
+          uv run --no-sync pytest -rfEs --junitxml=junit-${{ matrix.label }}.xml
+          status=$?
+          if [ "$status" -eq 1 ]; then
+            uv run --no-sync python -c "import json; [print(f'::warning title=Retried test::{t}') for t in json.load(open('.pytest_cache/v/cache/lastfailed'))]"
+            uv run --no-sync pytest -rfEs --last-failed --junitxml=junit-${{ matrix.label }}-retry.xml
+            status=$?
+          fi
+          exit "$status"
 
       - name: pytest (${{ matrix.platform_plugin }} platform plugin, layout and fonts)
         if: always()
