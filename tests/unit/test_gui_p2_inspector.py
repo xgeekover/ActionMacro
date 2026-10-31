@@ -4,6 +4,8 @@ controls, template preview card, base folder of relative template paths)."""
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,14 @@ from action_macro.core.models import ActionBlock, ActionType, ImageWaitParams, S
 from action_macro.core.persistence import ScenarioPersistence
 from action_macro.gui.main_window import MainWindow
 from action_macro.gui.property_inspector import PropertyInspector
+
+#: The Windows offscreen plugin has no system fonts: the fixed-pitch font comes out
+#: proportional and text is wider. These checks pass there with the real plugin
+#: (QT_QPA_PLATFORM=windows), so they are skipped only in that combination.
+windows_offscreen = pytest.mark.skipif(
+    sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") == "offscreen",
+    reason="no system fonts in the Windows offscreen plugin",
+)
 
 
 def _write_png(path: Path, width: int = 40, height: int = 20) -> Path:
@@ -514,6 +524,7 @@ def _long_steps(tmp_path: Path):
     ]
 
 
+@windows_offscreen
 @pytest.mark.parametrize("styled", [True, False], ids=["styled", "unstyled"])
 @pytest.mark.parametrize("size", [(1100, 680), (1400, 900)])
 def test_inspector_fits_the_panel_without_sideways_overflow(window, qtbot, tmp_path, size, styled, request):
