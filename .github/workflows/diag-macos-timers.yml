@@ -1,0 +1,82 @@
+name: Diagnose macOS runner timers (temporary)
+
+# Temporary: measures how late threads wake on the macOS runner, plain and moved out of
+# the Darwin background policy. Removed again before ci/tests is merged.
+
+on:
+  push:
+    branches: ["ci/tests"]
+
+permissions:
+  contents: read
+
+jobs:
+  timers:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: uv sync --frozen --all-extras
+      - name: Write the probe
+        run: |
+          cat > "$RUNNER_TEMP/diag_timers.py" <<'PY'
+          """How late do sleeping threads wake up? (sleep, Event.wait timeout, cross-thread set)."""
+          import os
+          import platform
+          import threading
+          import time
+          
+          
+          def report(name, samples, target):
+              late = sorted((s - target) * 1000 for s in samples)
+              n = len(late)
+              print(f"  {name:<28} p50={late[n // 2]:6.1f}ms  p90={late[int(n * 0.9)]:6.1f}ms  max={late[-1]:6.1f}ms")
+          
+          
+          def timed(fn, n=40):
+              out = []
+              for _ in range(n):
+                  t0 = time.perf_counter()
+                  fn()
+                  out.append(time.perf_counter() - t0)
+              return out
+          
+          
+          def cross_wake():
+              ev = threading.Event()
+              t0 = time.perf_counter()
+              threading.Timer(0.03, ev.set).start()
+              ev.wait(5)
+              return time.perf_counter() - t0
+          
+          
+          print(f"{platform.platform()} cpus={os.cpu_count()} load={os.getloadavg() if hasattr(os, 'getloadavg') else '-'}")
+          idle = threading.Event()
+          report("sleep(20ms)", timed(lambda: time.sleep(0.02)), 0.02)
+          report("Event.wait(timeout=10ms)", timed(lambda: idle.wait(0.01)), 0.01)
+          report("Timer(30ms).set -> waiter", [cross_wake() for _ in range(40)], 0.03)
+          PY
+      - name: Probe
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set +e
+          T="tests/e2e/test_input_engine_integration.py::test_adapter_click_returns_promptly_when_cancelled tests/e2e/test_input_engine_integration.py::test_adapter_press_key_releases_chord_in_reverse_when_cancelled tests/e2e/test_tier3_interactions.py::TestTier3Interactions::test_interaction_emergency_stop_during_image_polling tests/unit/test_challenge_input.py::test_challenge_wait_cancellation_during_pause_state tests/unit/test_wait_system.py::test_fixed_wait_pause_then_cancel tests/unit/test_wait_system.py::test_image_wait_polling_cancellation_latency tests/unit/test_wait_system.py::test_fixed_wait_sub_20ms_cancellation_latency"
+          ps -o pid,pri,nice,command -p $$
+          echo "== plain"
+          uv run --no-sync python "$RUNNER_TEMP/diag_timers.py"
+          uv run --no-sync pytest -p no:cacheprovider -rfE $T | tail -9
+          echo "== taskpolicy -b (into background, for comparison)"
+          taskpolicy -b uv run --no-sync python "$RUNNER_TEMP/diag_timers.py"
+          echo "== taskpolicy -B -p \$\$ (out of background)"
+          taskpolicy -B -p $$; echo "taskpolicy -B exit=$?"
+          ps -o pid,pri,nice,command -p $$
+          uv run --no-sync python "$RUNNER_TEMP/diag_timers.py"
+          uv run --no-sync pytest -p no:cacheprovider -rfE $T | tail -9
+          echo "== taskpolicy -t 0 -l 0"
+          taskpolicy -t 0 -l 0 uv run --no-sync python "$RUNNER_TEMP/diag_timers.py"
+          exit 0
