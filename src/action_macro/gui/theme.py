@@ -597,6 +597,12 @@ QLineEdit[readOnly="true"] { background-color: $surface; color: $text_muted; }
 
 QAbstractSpinBox { padding-right: 22px; }
 QAbstractSpinBox:focus { border: 2px solid $accent; padding: 4px 21px 4px 7px; }
+/* Qt sizes a styled spin box as min-height + 2 x border + 5 px (its padding does not count),
+   so with the min-height above it is 27 px, grown to the platform's size hint: 30 px with the
+   real macOS and Windows plugins next to 32 px line edits, 32 px offscreen. controlSize="md"
+   (set with the fixed height in code) pins it to CONTROL_HEIGHT, the 2 px focus border too. */
+QAbstractSpinBox[controlSize="md"] { min-height: ${spin_md_height}px; max-height: ${spin_md_height}px; }
+QAbstractSpinBox[controlSize="md"]:focus { min-height: ${spin_md_height_focus}px; max-height: ${spin_md_height_focus}px; }
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
     subcontrol-origin: border;
     width: 18px;
@@ -963,6 +969,8 @@ def build_stylesheet() -> str:
         font_header=FONT_HEADER,
         font_headline=FONT_HEADLINE,
         status_height=STATUS_BAR_HEIGHT,
+        spin_md_height=CONTROL_HEIGHT - 2 * 1 - 5,
+        spin_md_height_focus=CONTROL_HEIGHT - 2 * 2 - 5,
         run_hint_pad=RUN_BUTTON_HINT_PAD,
         run_hint_pad_focus=RUN_BUTTON_HINT_PAD - 1,
         icon_up=qss_icon_url("chevron-up", c.text_muted),

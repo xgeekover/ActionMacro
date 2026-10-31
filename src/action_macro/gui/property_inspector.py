@@ -203,10 +203,18 @@ def _pair(left: QWidget, right: Optional[QWidget] = None) -> QWidget:
 
 def _polish_spin(spin: QAbstractSpinBox) -> QAbstractSpinBox:
     """Lines the spin box text up with line edits (the style sheet's left padding
-    does not reach the embedded editor of a spin box) and lets it shrink to half
-    of the narrowest panel (its size hint is sized for the widest value)."""
+    does not reach the embedded editor of a spin box), gives it their height and lets
+    it shrink to half of the narrowest panel (its size hint is sized for the widest value).
+
+    With the real platform plugins (macOS and Windows) a styled spin box comes out 30 px
+    tall next to 32 px line edits and combo boxes; only offscreen it is 32 px already. The
+    style sheet resets the minimum height when it polishes the box, so the height is also
+    given to it through ``controlSize``, as for buttons (``components.style_button``).
+    """
     spin.lineEdit().setTextMargins(_SPIN_TEXT_INDENT, 0, 0, 0)
     spin.setMinimumWidth(_SPIN_MIN_WIDTH)
+    spin.setFixedHeight(theme.CONTROL_HEIGHT)
+    spin.setProperty("controlSize", "md")
     return spin
 
 
