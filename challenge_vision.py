@@ -263,9 +263,13 @@ class TestAdversarialTemplateMatching:
         assert cx == 50 + 15 and cy == 50 + 15
         assert score_low >= 0.99
 
-        # 2. std just above 1.0 (e.g. std = 2.5)
+        # 2. std just above 1.0 (std = 2.45). Three bands, not two: CCOEFF_NORMED ignores
+        #    brightness and contrast, so with a two-band needle (105 over 100) the window
+        #    15 rows lower (100 over the 50 background) also scores 1.0 up to float error
+        #    (0.999991), and some CPUs picked it. No shifted window can repeat three bands.
         needle_high_std = np.full((30, 30, 3), 100, dtype=np.uint8)
-        needle_high_std[:15, :] = 105
+        needle_high_std[:10, :] = 103
+        needle_high_std[20:, :] = 106
         assert np.std(needle_high_std) > 1.0
 
         canvas[120:150, 120:150] = needle_high_std
