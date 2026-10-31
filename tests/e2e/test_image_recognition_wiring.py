@@ -18,6 +18,7 @@ multi-monitor capture with negative virtual-desktop coordinates.
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -421,6 +422,7 @@ def test_headless_cli_waits_for_image_then_clicks(
 
 
 @pytest.mark.e2e
+@pytest.mark.skipif(sys.platform != "darwin", reason="Retina templates are scaled on macOS only")
 def test_headless_cli_retina_template_click_lands_on_logical_point(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -518,6 +520,8 @@ def test_engine_never_closes_injected_screen_driver(
 # =============================================================================
 # (c) Retina scale: 2x template vs 1x capture, through the real MSSScreenAdapter
 # =============================================================================
+# Only the macOS adapter scales templates (captures there are in points), so the tests that
+# expect a 0.5x match build it with platform_name="darwin" and run on every OS.
 
 def _wait(adapter: MSSScreenAdapter, template: Path, roi=None, timeout: float = 0.3):
     params = ImageWaitParams(
@@ -538,7 +542,7 @@ def test_retina_2x_template_matches_1x_capture_at_logical_coordinates(
     install_fake_mss(monkeypatch, FakeDesktop(scene.monitors, scene.capture_with))
     template = _write_png(tmp_path / "start@2x.png", scene.template_2x)
 
-    with MSSScreenAdapter() as adapter:
+    with MSSScreenAdapter(platform_name="darwin") as adapter:
         assert 0.5 in adapter.get_template_scales()
         matched, coords = _wait(adapter, template)
 
@@ -573,7 +577,7 @@ def test_retina_2x_template_larger_than_roi_matches_without_error(
     roi = (BUTTON_X - 20, BUTTON_Y - 10, BUTTON_W + 40, BUTTON_H + 20)
     assert scene.template_2x.shape[1] > roi[2] and scene.template_2x.shape[0] > roi[3]
 
-    with MSSScreenAdapter() as adapter:
+    with MSSScreenAdapter(platform_name="darwin") as adapter:
         matched, coords = _wait(adapter, template, roi=roi)
 
     assert matched is True
@@ -590,7 +594,7 @@ def test_scale_detection_failure_falls_back_to_common_scales(
     install_fake_mss(monkeypatch, FakeDesktop(scene.monitors, scene.capture_with))
     template = _write_png(tmp_path / "start@2x.png", scene.template_2x)
 
-    with MSSScreenAdapter() as adapter:
+    with MSSScreenAdapter(platform_name="darwin") as adapter:
         scales = adapter.get_template_scales()
         matched, coords = _wait(adapter, template)
 

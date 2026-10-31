@@ -7,6 +7,7 @@ All widgets run offscreen and only receive synthetic Qt events.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import List
@@ -239,7 +240,7 @@ def test_missing_template_path_is_one_line_with_the_full_path_in_the_tooltip(qtb
     assert looked_for in label.toolTip()
     assert label.height() <= label.fontMetrics().height() + 4  # one line, not 8-10 wrapped lines
     shown = label.elided_text(label.contentsRect().width())
-    assert "…" in shown and shown.endswith("/button.png")  # the folder is shortened, the name stays whole
+    assert "…" in shown and shown.endswith(os.sep + "button.png")  # the folder is shortened, the name stays whole
 
 
 def test_new_image_wait_step_starts_with_the_friendly_empty_drop_zone(window):

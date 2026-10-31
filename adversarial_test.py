@@ -545,6 +545,12 @@ def test_save_scenario_target_is_existing_directory(tmp_path: Path):
         save_scenario(scen, target_dir)
 
 
+#: chmod cannot make a folder read-only or a file unreadable on Windows (only the file's
+#: read-only attribute exists), so these two run where POSIX permission bits apply.
+posix_permissions = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+
+
+@posix_permissions
 def test_save_scenario_permission_denied_directory(tmp_path: Path):
     """Saving to a read-only directory raises PersistenceError cleanly."""
     ro_dir = tmp_path / "readonly_dir"
@@ -560,6 +566,7 @@ def test_save_scenario_permission_denied_directory(tmp_path: Path):
         ro_dir.chmod(stat.S_IRWXU)
 
 
+@posix_permissions
 def test_load_scenario_permission_denied_file(tmp_path: Path):
     """Loading an unreadable file raises PersistenceError cleanly."""
     unreadable = tmp_path / "unreadable.json"
