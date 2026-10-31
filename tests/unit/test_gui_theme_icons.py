@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,14 @@ from action_macro.gui.components import (
     StatusDot,
     shortcut_text,
     with_shortcut,
+)
+
+#: The Windows offscreen plugin has no system fonts: the fixed-pitch font comes out
+#: proportional. The check passes there with the real plugin (QT_QPA_PLATFORM=windows),
+#: so it is skipped only in that combination.
+windows_offscreen = pytest.mark.skipif(
+    sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") == "offscreen",
+    reason="no system fonts in the Windows offscreen plugin",
 )
 
 
@@ -148,6 +158,7 @@ def test_build_stylesheet_is_fully_resolved_and_uses_tokens(qapp):
     assert urls and all(Path(u).is_file() for u in urls)
 
 
+@windows_offscreen
 def test_fonts_are_platform_fonts(qapp):
     ui = theme.ui_font(theme.FONT_BODY)
     assert ui.pixelSize() == theme.FONT_BODY
