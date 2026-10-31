@@ -22,7 +22,8 @@ started with ``start_async()`` on the GUI thread like ``MainWindow``):
 - that the IME mode of a window can be read and set through its default IME window
   (WM_IME_CONTROL), the way another process's window would be;
 - (not with ``--text-only``) click precision (<= 1 px) on every monitor, including negative
-  coordinates; double click; emergency stop during a multi-click / long click hold / long
+  coordinates, with click steps in physical pixels (what the picker returns on Windows;
+  Qt's coordinates are smaller on a scaled monitor); double click; emergency stop during a multi-click / long click hold / long
   key hold; key chords (shift+a, cmd_or_ctrl+a, down/up, legacy ``modifiers`` field)
   verified on the key events themselves; the real ``MainWindow`` (Start button -> click
   with the real global hotkey listener); the coordinate picker; the hotkey listener's hook;
@@ -154,6 +155,17 @@ ImmGetConversionStatus = _bind(_IMM32, "ImmGetConversionStatus", wt.BOOL, HIMC,
 ImmSetConversionStatus = _bind(_IMM32, "ImmSetConversionStatus", wt.BOOL, HIMC, wt.DWORD, wt.DWORD)
 ImmGetDefaultIMEWnd = _bind(_IMM32, "ImmGetDefaultIMEWnd", wt.HWND, wt.HWND)
 ImmGetCompositionStringW = _bind(_IMM32, "ImmGetCompositionStringW", wt.LONG, HIMC, wt.DWORD, wt.LPVOID, wt.DWORD)
+
+
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT), ("dwFlags", wt.DWORD),
+                ("szDevice", wt.WCHAR * 32)]
+
+
+MonitorEnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(wt.RECT), wt.LPARAM)
+EnumDisplayMonitors = _bind(_USER32, "EnumDisplayMonitors", wt.BOOL, wt.HDC, ctypes.POINTER(wt.RECT),
+                            MonitorEnumProc, wt.LPARAM)
+GetMonitorInfoW = _bind(_USER32, "GetMonitorInfoW", wt.BOOL, wt.HMONITOR, ctypes.POINTER(MONITORINFOEXW))
 
 GA_ROOT = 2
 VK_CAPITAL, VK_SHIFT, VK_LBUTTON = 0x14, 0x10, 0x01
@@ -424,15 +436,28 @@ class ClickTarget(QWidget):
 
 
 class KeyField(QLineEdit):
-    """Line edit that records context-menu requests (and their reason) instead of showing the menu."""
+    """Line edit that records context-menu requests (and their reason) instead of showing the menu.
+
+    It also records how typed text arrived (key events or input-method commits), which tells
+    a lost character from one the IME is still holding.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.context_menus: List[str] = []
+        self.arrivals: List[Tuple[str, str, str]] = []
 
     def contextMenuEvent(self, e: Any) -> None:
         self.context_menus.append(e.reason().name)  # Keyboard (menu key, Shift+F10) or Mouse
         e.accept()
+
+    def keyPressEvent(self, e: Any) -> None:
+        self.arrivals.append(("key", e.text(), ""))
+        super().keyPressEvent(e)
+
+    def inputMethodEvent(self, e: Any) -> None:
+        self.arrivals.append(("ime", e.commitString(), e.preeditString()))
+        super().inputMethodEvent(e)
 
 
 class KeyPad(QWidget):
@@ -498,17 +523,50 @@ def wait_until(pred: Callable[[], bool], timeout: float, interval: float = 0.01)
     return pred()
 
 
+def monitor_origins() -> Dict[str, Tuple[int, int]]:
+    """Top-left corner of every monitor in physical pixels (this process is per-monitor DPI aware)."""
+    out: Dict[str, Tuple[int, int]] = {}
+
+    def cb(hmon: Any, _hdc: Any, _rect: Any, _data: Any) -> bool:
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        if GetMonitorInfoW(hmon, ctypes.byref(info)):
+            out[info.szDevice] = (info.rcMonitor.left, info.rcMonitor.top)
+        return True
+    EnumDisplayMonitors(None, None, MonitorEnumProc(cb), 0)
+    return out
+
+
 def displays() -> List[Dict[str, Any]]:
+    """Monitors in Qt's logical coordinates (what the app shows and stores), with their scale."""
     def _read() -> List[Dict[str, Any]]:
         primary = QGuiApplication.primaryScreen()
+        native = monitor_origins()
         out = []
         for s in QGuiApplication.screens():
             g, a = s.geometry(), s.availableGeometry()
             out.append({"name": s.name(), "main": s == primary, "x": g.x(), "y": g.y(), "w": g.width(),
                         "h": g.height(), "work": (a.x(), a.y(), a.width(), a.height()),
-                        "dpr": s.devicePixelRatio()})
+                        "dpr": s.devicePixelRatio(), "native_origin": native.get(s.name(), (g.x(), g.y()))})
         return out
     return gui(_read)
+
+
+def to_native(x: float, y: float) -> Tuple[int, int]:
+    """Physical screen pixel of the logical point (x, y): where the point is drawn on screen.
+
+    The check's own clicks (focusing a field, picking a point) go there, the way a person
+    would click what they see. Equal to (x, y) on a 100% monitor.
+    """
+    for d in DISPLAYS or displays():
+        if d["x"] <= x < d["x"] + d["w"] and d["y"] <= y < d["y"] + d["h"]:
+            nx, ny = d["native_origin"]
+            return round(nx + (x - d["x"]) * d["dpr"]), round(ny + (y - d["y"]) * d["dpr"])
+    return round(x), round(y)
+
+
+#: Monitors read once at the start (they do not change during the check).
+DISPLAYS: List[Dict[str, Any]] = []
 
 
 def main_display() -> Dict[str, Any]:
@@ -535,16 +593,33 @@ def centred(d: Dict[str, Any], w: int, h: int) -> Tuple[int, int]:
     return ax + (aw - w) // 2, ay + (ah - h) // 2
 
 
+def pad_area(d: Dict[str, Any], w: int, h: int, centre: bool = False) -> Tuple[int, int, int, int]:
+    """Where to put the click pad: a w x h pad, or the whole work area on a scaled monitor.
+
+    Click steps get physical pixels (what the picker returns on Windows). Should a click
+    still land elsewhere on a monitor that is not at 100%, the pad covers the work area,
+    so it lands on a window of this process and the check can see where.
+    """
+    if d["dpr"] != 1.0:
+        return d["work"]
+    x0, y0 = centred(d, w, h) if centre else lower_middle(d, w, h)
+    return x0, y0, w, h
+
+
+def landing(press: Tuple[float, str, float, float]) -> Dict[str, Any]:
+    """Where a click arrived, in logical coordinates and in physical pixels."""
+    return {"logical": (press[2], press[3]), "physical": to_native(press[2], press[3])}
+
+
 # --------------------------------------------------------------------------- checks: mouse
 
 def check_click_precision(pad: ClickTarget) -> None:
     rng = random.Random(20261031)
     for d in displays():
-        w, h = 700, 300
-        x0, y0 = lower_middle(d, w, h)
+        x0, y0, w, h = pad_area(d, 700, 300)
         place(pad, x0, y0, w, h)
         label = f"display {d['name']}{'(main)' if d['main'] else ''} origin=({d['x']},{d['y']}) dpr={d['dpr']}"
-        cx, cy = x0 + w // 2, y0 + h // 2
+        cx, cy = to_native(x0 + w // 2, y0 + h // 2)
         if not ours_at(cx, cy):
             step(f"click precision — {label}", None, reason="click pad not on top", owner=window_at(cx, cy))
             continue
@@ -552,8 +627,10 @@ def check_click_precision(pad: ClickTarget) -> None:
         time.sleep(0.2)
         errors, misses, results = [], 0, []
         for _ in range(10):
-            tx = rng.randint(x0 + 20, x0 + w - 21)
-            ty = rng.randint(y0 + 20, y0 + h - 21)
+            # A point on the pad, and the physical pixel a click step gets for it (the pick)
+            lx = rng.randint(x0 + 20, x0 + w - 21)
+            ly = rng.randint(y0 + 20, y0 + h - 21)
+            tx, ty = to_native(lx, ly)
             if not ours_at(tx, ty):
                 step(f"click precision — {label}", None, reason="target not ours", target=(tx, ty),
                      owner=window_at(tx, ty))
@@ -568,8 +645,10 @@ def check_click_precision(pad: ClickTarget) -> None:
                 results.append({"target": (tx, ty), "received": None})
                 continue
             press = next(e for e in pad.snapshot()[before:] if e[1] == "press")
-            errors.append(max(abs(press[2] - tx), abs(press[3] - ty)))
-            results.append({"target": (tx, ty), "received": (press[2], press[3]), "cursor": pos})
+            hx, hy = to_native(press[2], press[3])
+            errors.append(max(abs(hx - tx), abs(hy - ty)))
+            results.append({"target": (tx, ty), "target_logical": (lx, ly), "received": landing(press),
+                            "cursor_engine": pos})
         worst = max(errors) if errors else None
         step(f"click precision — {label}", misses == 0 and worst is not None and worst <= 1,
              clicks=len(results), missed=misses, worst_error_px=worst,
@@ -577,10 +656,9 @@ def check_click_precision(pad: ClickTarget) -> None:
 
 
 def check_double_click(pad: ClickTarget) -> None:
-    w, h = 700, 450
-    x0, y0 = centred(main_display(), w, h)
+    x0, y0, w, h = pad_area(main_display(), 700, 450, centre=True)
     place(pad, x0, y0, w, h)
-    cx, cy = x0 + w // 2, y0 + h // 2
+    cx, cy = to_native(x0 + w // 2, y0 + h // 2)
     if not ours_at(cx, cy):
         step("double click (clicks=2)", None, reason="pad not on top", owner=window_at(cx, cy))
         return
@@ -594,10 +672,9 @@ def check_double_click(pad: ClickTarget) -> None:
 
 
 def check_stop_multi_click(pad: ClickTarget) -> None:
-    w, h = 700, 450
-    x0, y0 = centred(main_display(), w, h)
+    x0, y0, w, h = pad_area(main_display(), 700, 450, centre=True)
     place(pad, x0, y0, w, h)
-    cx, cy = x0 + w // 2, y0 + h // 2
+    cx, cy = to_native(x0 + w // 2, y0 + h // 2)
     if not ours_at(cx, cy):
         step("emergency stop during multi-click", None, reason="pad not on top", owner=window_at(cx, cy))
         return
@@ -620,10 +697,9 @@ def check_stop_multi_click(pad: ClickTarget) -> None:
 
 
 def check_stop_long_click_hold(pad: ClickTarget) -> None:
-    w, h = 700, 450
-    x0, y0 = centred(main_display(), w, h)
+    x0, y0, w, h = pad_area(main_display(), 700, 450, centre=True)
     place(pad, x0, y0, w, h)
-    cx, cy = x0 + w // 2, y0 + h // 2
+    cx, cy = to_native(x0 + w // 2, y0 + h // 2)
     if not ours_at(cx, cy):
         step("emergency stop during long click hold", None, reason="pad not on top", owner=window_at(cx, cy))
         return
@@ -649,10 +725,9 @@ def check_real_app_end_to_end(pad: ClickTarget) -> None:
     from action_macro.gui.main_window import MainWindow
 
     d = main_display()
-    w, h = 700, 300
-    x0, y0 = lower_middle(d, w, h)
+    x0, y0, w, h = pad_area(d, 700, 300)
     place(pad, x0, y0, w, h)
-    tx, ty = x0 + w // 2 + 41, y0 + h // 2 - 17
+    tx, ty = to_native(x0 + w // 2 + 41, y0 + h // 2 - 17)  # typed in as a pick would fill it in
     holder: Dict[str, Any] = {}
 
     def build() -> None:
@@ -690,9 +765,10 @@ def check_real_app_end_to_end(pad: ClickTarget) -> None:
     finished = eng.wait_for_completion(timeout=8.0) if eng is not None else False
     wait_until(lambda: any(e[1] == "press" for e in pad.snapshot()[before:]), 2.0)
     press = next((e for e in pad.snapshot()[before:] if e[1] == "press"), None)
+    hx, hy = to_native(press[2], press[3]) if press else (None, None)
     step("real app end-to-end (MainWindow → Start → click), no crash",
-         bool(finished and press and abs(press[2] - tx) <= 1 and abs(press[3] - ty) <= 1 and listener_alive),
-         target=(tx, ty), received=(press[2], press[3]) if press else None,
+         bool(finished and press and abs(hx - tx) <= 1 and abs(hy - ty) <= 1 and listener_alive),
+         target=(tx, ty), received=landing(press) if press else None,
          engine_state=str(getattr(eng, "state", None)), global_hotkey_listener_alive_mid_run=listener_alive)
     gui(lambda: holder["win"].hide())
 
@@ -711,7 +787,7 @@ def focus_field(kp: KeyPad, field: QWidget) -> bool:
     if not gui(lambda: kp.isVisible()):
         show_keypad(kp)
     geo = gui(lambda: field.mapToGlobal(field.rect().center()))
-    ex, ey = geo.x(), geo.y()
+    ex, ey = to_native(geo.x(), geo.y())  # where the field is on screen
     if not ours_at(ex, ey):
         step("key pad focus", None, reason="key pad not on top", owner=window_at(ex, ey))
         return False
@@ -853,16 +929,30 @@ def type_into(kp: KeyPad, field: QWidget, name: str, text: str, native: bool, ca
              wanted={"hangul": native, "caps_lock": caps})
         return
     n = TAP.mark()
+    arrived = gui(lambda: len(kp.edit.arrivals))
     run(engine_for(text_block(text)))
+    in_front, focused = we_are_frontmost(), gui(lambda: QApplication.focusWidget() is field)
+    foreground = _class_of(GetForegroundWindow())  # whose window had the keys (class name only)
     time.sleep(0.4)
+    expected = text.replace("\r\n", "\n")
+    early = gui(lambda: kp.text_of(field))
+    if early != expected:  # late, or lost? Give the GUI thread more time before judging.
+        wait_until(lambda: gui(lambda: kp.text_of(field)) == expected, 2.0, 0.05)
     got = gui(lambda: kp.text_of(field))
     after = keyboard_state(kp)
     events, _ = strip_flush(TAP.since(n))
-    expected = text.replace("\r\n", "\n")
     unchanged = after["hangul"] == before["hangul"] and after["caps_lock"] == before["caps_lock"]
-    step(name, got == expected and unchanged, field_text=got, expected=expected,
+    extra: Dict[str, Any] = {}
+    if field is kp.edit:  # how the characters came in: key events, IME commits
+        kinds = gui(lambda: [kind for kind, _, _ in kp.edit.arrivals[arrived:]])
+        extra["arrival_kinds"] = {kind: kinds.count(kind) for kind in sorted(set(kinds))}
+    if early != expected:
+        extra = {"field_text_after_0_4s": early,
+                 "arrivals": gui(lambda: kp.edit.arrivals[arrived:]) if field is kp.edit else None}
+    step(name, got == expected and unchanged, field_text=got, expected=expected, **extra,
          hangul=after["hangul"], caps_lock=after["caps_lock"], conversion=after["conversion"],
          composition_bytes=after["composition_bytes"], state_unchanged=unchanged,
+         in_front_after=in_front, field_focused_after=focused, foreground_class_after=foreground,
          unicode_packets=sum(1 for k, nm in events if k == "down" and nm.startswith("text:")),
          keys=[nm for k, nm in events if k == "down" and not nm.startswith("text:")],
          shift_still_down=shift_down())
@@ -895,8 +985,8 @@ def check_ime_control(kp: KeyPad) -> None:
          original_mode=hex(original), results=results, mode_after_restore=hex(ime_window_mode(hwnd) or 0))
 
 
-def check_type_text_states(kp: KeyPad, manual_ime: bool, states: List[str]) -> None:
-    """Every text in every chosen keyboard state, then the keyboard is put back as it was."""
+def check_type_text_states(kp: KeyPad, manual_ime: bool, states: List[str], repeat: int = 1) -> None:
+    """Every text (``repeat`` times) in every chosen keyboard state, then the keyboard is put back."""
     if not TAP.ok:
         step("key event hook", False, reason="the low-level keyboard hook did not start")
     show_keypad(kp)
@@ -932,7 +1022,9 @@ def check_type_text_states(kp: KeyPad, manual_ime: bool, states: List[str]) -> N
                  method=method, **state)
             for text, kind in TYPED_TEXTS:
                 field = kp.lines if kind == "lines" else kp.edit
-                type_into(kp, field, f"[{label}] text step types {text!r}", text, native, caps)
+                for i in range(repeat):
+                    suffix = f" #{i + 1}" if repeat > 1 else ""
+                    type_into(kp, field, f"[{label}] text step types {text!r}{suffix}", text, native, caps)
     finally:
         restore_keyboard(kp)
 
@@ -1053,7 +1145,14 @@ def repeat_stop_key_hold(kp: KeyPad, trials: int) -> None:
 
 # --------------------------------------------------------------------------- checks: picker, listener
 
-def check_picker() -> None:
+def check_picker(pad: ClickTarget) -> None:
+    """The coordinate picker on every monitor, then a click step on the picked point.
+
+    The check clicks where the target point is drawn on screen (its physical pixel), as a
+    person would; the picker must report that physical pixel, the space click steps use on
+    Windows. A click step with those coordinates must then land on the same point: that is
+    the whole pick-then-click workflow.
+    """
     cp.CoordinatePickerOverlay._capture_screen_snapshot = lambda self: None  # no screen capture
     for d in displays():
         tx, ty = d["x"] + d["w"] // 2 + 37, d["y"] + d["h"] // 2 + 23
@@ -1068,20 +1167,44 @@ def check_picker() -> None:
             ov.start()
         gui(_open)
         time.sleep(0.8)
-        label = f"display {d['name']}{'(main)' if d['main'] else ''}"
-        if not ours_at(tx, ty):
-            step(f"coordinate picker — {label}", None, reason="overlay not on top", owner=window_at(tx, ty))
+        label = f"display {d['name']}{'(main)' if d['main'] else ''} dpr={d['dpr']}"
+        nx, ny = to_native(tx, ty)
+        if not ours_at(nx, ny):
+            step(f"coordinate picker — {label}", None, reason="overlay not on top", owner=window_at(nx, ny))
             gui(lambda: holder["ov"].close_all())
             continue
         assert ADAPTER is not None
-        ADAPTER.click(tx, ty)
+        ADAPTER.click(nx, ny)
         wait_until(lambda: "sel" in box or "cancel" in box, 2.0)
-        step(f"coordinate picker — {label}", box.get("sel") == (tx, ty), target=(tx, ty), picked=box.get("sel"))
+        picked = box.get("sel")
+        step(f"coordinate picker — {label}", picked == (nx, ny), target_logical=(tx, ty),
+             clicked_physical=(nx, ny), picked=picked)
         try:
             gui(lambda: holder["ov"].close_all())
         except Exception:
             pass
         time.sleep(0.3)
+        if picked is None:
+            continue
+        # The picked coordinates in a click step: the pad covers the work area, so the click
+        # lands on this process wherever it goes.
+        ax, ay, aw, ah = d["work"]
+        place(pad, ax, ay, aw, ah)
+        px, py = picked
+        if not ours_at(px, py):  # the engine clicks the coordinates as given
+            step(f"picker → click step — {label}", None, reason="pad not under the click", owner=window_at(px, py))
+            gui(lambda: pad.hide())
+            continue
+        time.sleep(0.6)
+        before = len(pad.snapshot())
+        run(engine_for(click_block(px, py)))
+        wait_until(lambda: any(e[1] == "press" for e in pad.snapshot()[before:]), 1.0)
+        press = next((e for e in pad.snapshot()[before:] if e[1] == "press"), None)
+        step(f"picker → click step lands on the picked point — {label}",
+             bool(press and abs(press[2] - tx) <= 1 and abs(press[3] - ty) <= 1),
+             picked=picked, landed=landing(press) if press else None,
+             error_px=round(max(abs(press[2] - tx), abs(press[3] - ty)), 1) if press else None)
+        gui(lambda: pad.hide())
 
 
 def check_listener_health() -> None:
@@ -1099,7 +1222,7 @@ def check_listener_health() -> None:
 
 def controller(app: QApplication, pad: ClickTarget, kp: KeyPad, start_pos: Tuple[int, int],
                stop_key_trials: int, text_only: bool = False, manual_ime: bool = False,
-               states: Optional[List[str]] = None, context_menu_only: bool = False) -> None:
+               states: Optional[List[str]] = None, context_menu_only: bool = False, repeat: int = 1) -> None:
     def guarded(check: Callable[..., None], *args: Any) -> None:
         try:
             check(*args)
@@ -1108,7 +1231,8 @@ def controller(app: QApplication, pad: ClickTarget, kp: KeyPad, start_pos: Tuple
 
     try:
         time.sleep(1.0)
-        REPORT["displays"] = displays()
+        DISPLAYS[:] = displays()
+        REPORT["displays"] = DISPLAYS
         if stop_key_trials:
             guarded(repeat_stop_key_hold, kp, stop_key_trials)
             return
@@ -1116,7 +1240,7 @@ def controller(app: QApplication, pad: ClickTarget, kp: KeyPad, start_pos: Tuple
             show_keypad(kp)
             guarded(check_context_menu_keys, kp)
             return
-        guarded(check_type_text_states, kp, manual_ime, states or [key for key, *_ in KEYBOARD_STATES])
+        guarded(check_type_text_states, kp, manual_ime, states or [key for key, *_ in KEYBOARD_STATES], repeat)
         if text_only:
             return
         guarded(check_key_chords, kp)
@@ -1127,7 +1251,7 @@ def controller(app: QApplication, pad: ClickTarget, kp: KeyPad, start_pos: Tuple
                       check_stop_long_click_hold, check_real_app_end_to_end):
             guarded(check, pad)
         gui(lambda: pad.hide())
-        guarded(check_picker)
+        guarded(check_picker, pad)
         guarded(check_listener_health)
     finally:
         try:
@@ -1162,10 +1286,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="if the IME mode cannot be switched by the check, ask for the Han/Eng key")
     parser.add_argument("--countdown", type=float, default=3.0, metavar="S",
                         help="seconds to wait before the first input, to take your hands off (default 3)")
+    parser.add_argument("--repeat", type=int, default=1, metavar="N",
+                        help="type every text N times in each keyboard state (intermittent failures)")
     state_keys = [key for key, *_ in KEYBOARD_STATES]
     parser.add_argument("--states", default=",".join(state_keys),
                         help=f"keyboard states for the text checks, comma-separated (default: {','.join(state_keys)})")
     args = parser.parse_args(argv)
+    # Redirected to a file, stdout uses the ANSI code page (cp949 on Korean Windows), which
+    # has no em dash: the first print would end the check.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     states = [s.strip() for s in args.states.split(",") if s.strip()]
     if unknown := [s for s in states if s not in state_keys]:
         parser.error(f"unknown --states {unknown}; choose from {state_keys}")
@@ -1200,7 +1331,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     threading.Thread(target=watchdog, daemon=True).start()
     threading.Thread(target=controller,
                      args=(app, pad, kp, start_pos, args.stop_key_trials, args.text_only, args.manual_ime, states,
-                           args.context_menu_only),
+                           args.context_menu_only, max(1, args.repeat)),
                      daemon=True).start()
     app.exec()
     save_report()

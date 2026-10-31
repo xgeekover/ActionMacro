@@ -72,6 +72,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--report", default="device_check_hotkeys_report.json", help="JSON report path")
     parser.add_argument("--timeout", type=float, default=240.0, help="seconds to wait for the key presses")
     args = parser.parse_args(argv)
+    # Redirected to a file, stdout uses the ANSI code page (cp949 on Korean Windows), which
+    # has no em dash.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     app = create_app(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
