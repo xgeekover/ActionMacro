@@ -480,8 +480,9 @@ def test_dropping_an_image_on_the_card_sets_the_path(qtbot, tmp_path):
     drop = QDropEvent(QPointF(5, 5), QtCore_Qt.DropAction.CopyAction, mime,
                       QtCore_Qt.MouseButton.LeftButton, QtCore_Qt.KeyboardModifier.NoModifier)
     card.dropEvent(drop)
-    assert inspector.form_image.edit_path.text() == str(image)
-    assert act.params.template_path == str(image)
+    # Qt gives the dropped path with forward slashes, also on Windows (C:/Users/...).
+    assert Path(inspector.form_image.edit_path.text()) == image
+    assert Path(act.params.template_path) == image
     assert inspector.form_image.preview_state() == "found"
 
     text_only = QMimeData()
