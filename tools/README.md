@@ -111,7 +111,7 @@ macOS 판과 같다(무한 대기 매크로 → Esc → Ctrl+Shift+S). 주입되
 - 배율이 100% 가 아닌 Windows 화면에서 0.1.1 이하의 피커로 찍은 좌표는 논리 좌표라 엉뚱한 곳을 누른다 — 다시 찍는다. 100% 에서 찍은 좌표는 그대로 맞다.
 - 점검 자신의 클릭(입력 칸 포커스, 피커 클릭)은 점이 그려진 물리 픽셀로 가고, 클릭 단계에는 피커가 줄 물리 픽셀을 넣는다. 배율이 100% 가 아니면 클릭 판은 작업 영역 전체를 덮어, 빗나가도 점검 창 위에 떨어지게 한다.
 - 음수 좌표·다중 모니터·배율 150% 는 아직 재지 못했다(모니터 하나).
-- **자동 테스트를 Windows 에서 돌리면**(`QT_QPA_PLATFORM=offscreen`) 다 통과하고, 다음만 건너뛰거나 예상 실패로 나온다: offscreen 플러그인에 시스템 글꼴이 없어 글꼴·패널 폭 검사 5건 SKIP(실제 플러그인 `QT_QPA_PLATFORM=windows` 로는 통과), POSIX 권한 2건 SKIP, 열린 파일을 `os.replace` 로 못 바꾸는 동시 읽기·쓰기 1건 XFAIL, macOS 전용 4건 SKIP(2026-10-31, GitHub Actions windows-latest). 이 실행은 이제 `.github/workflows/tests.yml` 이 main push 와 PR 마다 macOS 와 함께 돌린다. 결과 개수는 실행의 JUnit 산출물(`junit-*`)에서 읽는다 — `gh run view --log` 은 잘려서 요약 줄이 빠질 수 있다.
+- **자동 테스트를 Windows 에서 돌리면**(`QT_QPA_PLATFORM=offscreen`) 다 통과하고, 다음만 건너뛰거나 예상 실패로 나온다: offscreen 플러그인에 시스템 글꼴이 없어 글꼴·패널 폭 검사 5건 SKIP(실제 플러그인 `QT_QPA_PLATFORM=windows` 로는 통과), POSIX 권한 2건 SKIP, 열린 파일을 `os.replace` 로 못 바꾸는 동시 읽기·쓰기 1건 XFAIL, macOS 전용 4건 SKIP(2026-10-31, GitHub Actions windows-latest). 이 실행은 이제 `.github/workflows/tests.yml` 이 main push 와 PR 마다 돌린다(macOS 러너는 스레드가 25~75ms 늦게 깨어나 실제 플러그인 레이아웃·글꼴 검사만 돌린다). 결과 개수는 실행의 JUnit 산출물(`junit-*`)에서 읽는다 — `gh run view --log` 은 잘려서 요약 줄이 빠질 수 있다.
 
 | Windows 기준선 | 값 |
 |---|---|

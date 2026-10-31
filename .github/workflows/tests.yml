@@ -1,10 +1,14 @@
 name: Tests
 
-# Runs the automated tests on macOS (Apple Silicon) and Windows for every push to main and
-# every pull request. OS input and screen capture are faked, so this does not replace the
-# real-device checks in tools/. The offscreen Qt plugin hides some layout and font problems
-# (spin boxes are 32 px offscreen but 30 px on screen; Windows offscreen has no system
-# fonts), so those checks run a second time with the real platform plugin.
+# Runs for every push to main and every pull request. OS input and screen capture are
+# faked, so this does not replace the real-device checks in tools/.
+#
+# - Windows: the whole suite offscreen, then the layout and font checks again with the real
+#   platform plugin (spin boxes are 32 px offscreen but 30 px on screen, and Windows
+#   offscreen has no system fonts).
+# - macOS: only those layout and font checks, with the real cocoa plugin. The whole suite is
+#   run on a real Mac instead: on the macos-15 runner (a 3-CPU VM) threads wake 25-75 ms
+#   late (5-10 ms on a real Mac), so the 25-150 ms stop-latency budgets fail every run.
 
 on:
   push:
@@ -28,17 +32,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: windows-latest
+            label: windows-x64
+            whole_suite: true
+            platform_plugin: windows
+            platform_args: ""
           - os: macos-15
             label: macos-arm64
+            whole_suite: false
             platform_plugin: cocoa
             # "unstyled" clears only the style sheet; run alone it then gets the native
             # macOS style, which the app never uses (apply_theme always sets the Fusion
             # based AppStyle) and which is 9 px wider than the panel at 1100x680.
             platform_args: -k "not unstyled"
-          - os: windows-latest
-            label: windows-x64
-            platform_plugin: windows
-            platform_args: ""
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: "1"
@@ -53,11 +59,11 @@ jobs:
         shell: bash
         run: uv sync --frozen --all-extras
 
-      # Shared runners (the macOS VM most of all) wake sleeping threads tens of ms late, so a
-      # few of the stop-latency checks miss their budget at random. Failed tests run once
-      # more; a real slowdown fails again, and anything that passed only on the retry is
-      # listed as a warning on the run.
-      - name: pytest (offscreen)
+      # A shared runner can wake a sleeping thread late, so a stop-latency check may miss
+      # its budget at random. Failed tests run once more; a real slowdown fails again, and
+      # anything that passed only on the retry is listed as a warning on the run.
+      - name: pytest (offscreen, whole suite)
+        if: matrix.whole_suite
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
