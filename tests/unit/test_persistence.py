@@ -6,6 +6,7 @@ Unit tests covering all persistence specifications (TP01 - TP20) for action_macr
 
 from pathlib import Path
 import json
+import sys
 import pytest
 
 from action_macro.core.models import (
@@ -326,6 +327,19 @@ def test_resolve_template_path():
     scenario_path = Path("/path/to/scenario.json")
     resolved = resolve_template_path("templates/btn.png", scenario_path)
     assert resolved == Path("/path/to/templates/btn.png").resolve()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows drive and UNC paths")
+@pytest.mark.parametrize("template", [
+    "{tmp}\\btn.png",       # chosen with Browse after the scenario was saved (backslashes)
+    "{tmp_posix}/btn.png",  # the same path as Qt's file dialog and drag-and-drop give it
+    "Z:/images/btn.png",    # another drive than the scenario: saved as an absolute path
+    "\\\\server\\share\\btn.png",
+])
+def test_resolve_template_path_keeps_a_windows_absolute_path(tmp_path, template):
+    template = template.format(tmp=tmp_path, tmp_posix=tmp_path.as_posix())
+    scenario_dir = tmp_path / "scenarios"
+    assert resolve_template_path(template, scenario_dir / "s.json") == Path(template).resolve()
 
 
 # ---------------------------------------------------------------------------
