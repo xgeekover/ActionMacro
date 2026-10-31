@@ -4,9 +4,9 @@
 2026-10-24 처음 실기기에서 돌렸을 때, 테스트 727개가 모두 통과한 상태에서 앱이 **클릭·키 단계 시작 순간**과 **긴급 정지 리스너가 켜지는 순간** 강제 종료됐다
 (pynput 이 macOS 키보드 입력 소스 API 를 메인 스레드 밖에서 불러 SIGTRAP). 입력 · 단축키 · 좌표 피커 · 엔진의 스레드 구조를 고친 뒤에는 아래 점검을 돌린다.
 
-> ⚠️ 두 스크립트 모두 **실제 마우스·키보드를 움직인다.** 도는 동안 손을 뗀다.
+> ⚠️ 이 스크립트들은 모두 **실제 마우스·키보드를 움직인다.** 도는 동안 손을 뗀다. (Windows 판은 3절부터)
 
-## 필요한 권한 (점검을 실행하는 터미널 앱에)
+## 필요한 권한 (macOS — 점검을 실행하는 터미널 앱에)
 
 시스템 설정 → 개인정보 보호 및 보안:
 - **손쉬운 사용** — 마우스·키 입력을 보낸다
@@ -70,6 +70,49 @@
 | 긴급 정지 — 실행 스레드 종료 / 버튼·키 해제 | 1.5~7ms |
 | 직접 누른 Esc / Ctrl+Shift+S | 24ms / 1ms 미만 |
 
+## 3. Windows 자동 점검 — `device_check_windows.py` (약 30초)
+
+macOS 점검과 같은 구성(드라이버를 주입하지 않은 엔진을 GUI 스레드에서 `start_async()`)이고, **글자 입력(Send: Text)** 점검이 먼저 돈다. 권한 설정은 필요 없다.
+
+```powershell
+.venv\Scripts\python tools\device_check_windows.py                     # 전체 점검
+.venv\Scripts\python tools\device_check_windows.py --text-only         # 글자 입력만
+.venv\Scripts\python tools\device_check_windows.py --text-only --states hangul,caps
+.venv\Scripts\python tools\device_check_windows.py --context-menu-only # 오른쪽 클릭처럼 보이는 키
+```
+
+| 점검 | 통과 기준 |
+|---|---|
+| 글자 입력 — `myid123`, `Ab1 x_Y!@`, `안녕하세요 홍길동 id123`, 줄바꿈(LF·CRLF)·탭이 든 문자열 × 한/영 영문 · 한글 · Caps Lock 켬 · 한글+Caps Lock | 입력 칸의 글자 = 단계의 글자, 실행 뒤 IME 모드·Caps Lock 그대로 |
+| WM_IME_CONTROL 로 창의 IME 모드 읽기·바꾸기 | ImmGetConversionStatus 와 일치 |
+| 조합키 · 키 누르는 도중 정지 · 클릭 정밀도(모니터마다) · 더블클릭 · 클릭 도중 정지 · 실제 메인 창 · 좌표 피커 · 단축키 리스너 | macOS 점검과 같다 |
+| `menu` · `shift+f10` Key Input 단계 | 판정 없이 기록(INFO): 컨텍스트 메뉴 요청이 생기는지 |
+
+- 한글 상태는 점검 창 자신의 입력 컨텍스트에 `ImmSetConversionStatus`(안 되면 기본 IME 창에 `WM_IME_CONTROL`)로 IME_CMODE_NATIVE 를 켜서 만든다. 둘 다 안 되면 `--manual-ime` 로 한/영 키를 눌러 달라고 묻는다. Caps Lock 은 주입한 Caps Lock 키로 켠다. 끝나면(실패·감시 시간 초과 포함) 둘 다 원래대로 돌린다.
+- 안전 장치: 클릭 직전 그 좌표의 최상위 창(WindowFromPoint → GetAncestor)이 점검 프로세스 것인지, 키 직전 전경 창이 점검 프로세스 것이고 입력 칸에 포커스가 있는지 확인한다. 키 기록은 저수준 키보드 훅에서 **주입 이벤트(LLKHF_INJECTED)만** 남긴다. 다른 프로세스 창은 클래스 이름만 기록한다(제목 없음). 120초(`--timeout`)가 넘으면 입력을 풀고 IME·Caps Lock 을 돌린 뒤 끝난다.
+
+## 4. Windows 직접 누르는 긴급 정지 — `device_check_hotkeys_windows.py` (대화형)
+
+macOS 판과 같다(무한 대기 매크로 → Esc → Ctrl+Shift+S). 주입되지 않은 두 키를 누른 시각만 기록한다.
+지금 누를 키는 화면 위쪽의 안내 창(항상 위)에 나온다. 백그라운드로 실행하면 콘솔 출력이 보이지 않기 때문이다.
+**Claude Code 등 터미널에 포커스가 있으면 Esc 가 그 터미널로 간다** — 누르기 전에 메인 창을 클릭해 둔다.
+
+## 알아 둘 점 — Windows (2026-10-31 실측, Windows 10 22H2 · 2560×1440 배율 100% 모니터 1대 · Microsoft 한국어 IME)
+
+- **한/영이 한글 상태여도 글자 입력은 그대로 들어간다.** 한 글자씩 보내는 KEYEVENTF_UNICODE 패킷(VK_PACKET)은 한국어 IME 를 거쳐도 바뀌지 않는다(점검 창의 Qt 입력 칸, 패키지 → 메모장 둘 다). macOS 와 달리 입력하는 동안 영문으로 바꾸는 장치가 필요 없다. Caps Lock 켬에서도 같다.
+- 줄바꿈과 탭만 실제 Enter·Tab 키로 간다. CRLF 는 Enter 한 번.
+- 한국어 IME 는 영문으로 바꾸면(IME_CMODE_NATIVE 끔) IME open 상태도 함께 꺼진다. 점검은 open + NATIVE 를 한글로 본다.
+- **Caps Lock 을 한/영으로 바꾸는 프로그램**(AutoHotkey `CapsLock::` 등)이 돌고 있으면 주입한 Caps Lock 도 한/영으로 바뀐다. 점검은 이를 알아보고 그 상태를 SKIP 한다 — 재매핑을 잠시 멈추고 `--states caps,hangul_caps` 로 다시 돌린다.
+- 백그라운드 셸에서 띄운 창은 전경 잠금 때문에 다른 창 뒤에 뜰 수 있다. 점검 창은 항상 위(topmost)이고, 첫 클릭(점검 창 위인지 확인한 뒤)으로 전경이 된다.
+- `menu`(VK_APPS)와 `shift+f10` Key Input 단계는 **오른쪽 클릭과 같은 컨텍스트 메뉴**를 연다. `cmd`/`win` 이 든 단계(`cmd+x` 등)는 Windows 에서 Win 키 조합이다 — Win+X 는 시작 버튼 오른쪽 클릭 메뉴, Win+V 는 클립보드 기록 창.
+- 이 PC 는 모니터가 하나(배율 100%)라 **음수 좌표·다중 모니터·배율 125%/150%** 는 재지 못했다. 좌표 피커는 Qt 논리 좌표를, pynput 은 물리 픽셀 좌표를 쓰므로 배율이 100% 가 아닌 모니터에서는 찍은 점과 클릭 점이 어긋날 수 있다 — 그런 PC 에서 이 점검을 돌려 확인한다.
+
+| Windows 기준선 | 값 |
+|---|---|
+| 클릭 오차 (주 모니터) | 0px |
+| 긴급 정지 — 실행 스레드 종료 / 버튼·키 해제 | 19.5ms / 3~5ms |
+| 직접 누른 Esc / Ctrl+Shift+S | 12ms / 9.6ms |
+
 ## 아직 없는 것
 - **이미지 인식(실제 화면 캡처)** 점검 — 터미널 앱에 화면 기록 권한이 필요하다.
-- **레티나 화면 · Windows** — 이 스크립트는 macOS 전용이고, 위 기준선은 1배 모니터에서 쟀다.
+- **레티나 화면** — macOS 기준선은 1배 모니터에서 쟀다. Windows 는 위 "알아 둘 점" 참고.
