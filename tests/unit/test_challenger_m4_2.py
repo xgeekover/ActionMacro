@@ -229,8 +229,10 @@ class TestLogConsoleMemoryStress:
         assert "entry #19999" in console._entries[-1].message
         assert "entry #0" not in [e.message for e in console._entries[:100]]
 
-        # Verification 4: Throughput check (20k entries within 5 seconds)
-        assert elapsed < 5.0, f"20,000 log additions took {elapsed:.2f}s"
+        # Verification 4: Throughput check. It catches a large regression (a quadratic trim,
+        # a full re-render per line), not machine speed: most of the time is Qt laying out
+        # the text. Measured: 3.1 s on an Apple M4, 7.1-10.3 s on a Windows i7-8550U.
+        assert elapsed < 15.0, f"20,000 log additions took {elapsed:.2f}s"
 
     def test_multithreaded_signal_log_burst(self, qtbot):
         """Pushes 10,000 log lines across 4 concurrent threads via Qt QueuedConnection."""
