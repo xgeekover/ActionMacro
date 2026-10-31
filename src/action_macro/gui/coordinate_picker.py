@@ -56,6 +56,14 @@ HUD_HINT_HEIGHT = 22
 HUD_HINT_PAD_X = 8
 HUD_HINT_TEXT = "Click to pick · Esc to cancel"
 
+#: Whether picked coordinates are physical pixels instead of Qt's logical points. They must be
+#: in the space the engine clicks in and the screen adapter captures (see
+#: action_macro.engine.screen_adapter): global display points on macOS, which Qt uses as well,
+#: and physical pixels elsewhere. On Windows the process is per-monitor DPI aware, so pynput's
+#: SetCursorPos and mss use physical pixels while Qt divides each screen by its scale factor
+#: (1.25 at 125 %).
+PICKS_PHYSICAL_PIXELS = sys.platform != "darwin"
+
 
 class CoordinatePickerOverlay(QWidget):
     """Semi-transparent full-screen coordinate picker overlay.
@@ -63,9 +71,11 @@ class CoordinatePickerOverlay(QWidget):
     Features:
     - Real-time mouse position tracking with thin crosshairs.
     - 8x Pixel Magnifier zoom box showing the 15x15 physical pixel area around cursor.
-    - Live HUD displaying logical coordinates, RGB pixel color, and hex code.
+    - Live HUD displaying the picked coordinates, RGB pixel color, and hex code.
     - Multi-monitor master-slave synchronization.
     - Retina / HiDPI awareness via CoordinateTransformer.
+    - Picked coordinates are the ones a click step uses: physical pixels on Windows,
+      where a scaled monitor's Qt coordinates differ (see PICKS_PHYSICAL_PIXELS).
     - Headless programmatic simulation API for automated CI testing.
     """
 
@@ -188,17 +198,19 @@ class CoordinatePickerOverlay(QWidget):
 
     def _sync_initial_cursor_position(self) -> None:
         """Synchronizes overlay position with initial cursor coordinates."""
+        if not self.target_screen:
+            return
+        s_geom = self.target_screen.geometry()
         pos = QCursor.pos()
+        local = (pos.x() - s_geom.x(), pos.y() - s_geom.y())
         if self.input_adapter and hasattr(self.input_adapter, "get_position"):
             try:
-                ix, iy = self.input_adapter.get_position()
-                pos = QPoint(ix, iy)
+                local = self._local_from_engine(*self.input_adapter.get_position())
             except Exception:
                 pass
 
-        if self.target_screen and self.target_screen.geometry().contains(pos):
-            s_geom = self.target_screen.geometry()
-            self.update_cursor_position(pos.x() - s_geom.x(), pos.y() - s_geom.y(), pos.x(), pos.y())
+        if 0 <= local[0] < s_geom.width() and 0 <= local[1] < s_geom.height():
+            self.update_cursor_position(local[0], local[1])
 
     def _capture_screen_snapshot(self) -> None:
         """Captures a pristine, un-tinted desktop snapshot for instant magnifier cropping."""
@@ -271,6 +283,31 @@ class CoordinatePickerOverlay(QWidget):
     # Position & Color Sampling
     # -------------------------------------------------------------------------
 
+    def _physical_scale(self) -> float:
+        """Physical pixels per Qt point on this overlay's screen (1.0 when picking points)."""
+        if not PICKS_PHYSICAL_PIXELS or not self.target_screen:
+            return 1.0
+        return float(self.target_screen.devicePixelRatio())
+
+    def _engine_from_global(self, global_x: float, global_y: float) -> Tuple[int, int]:
+        """Returns the click-step coordinates of a point given in Qt's global coordinates.
+
+        Qt keeps a screen's top-left corner and divides the distance from it by the scale
+        factor, so the physical pixel is ``origin + (global - origin) * scale``.
+        """
+        scale = self._physical_scale()
+        if scale == 1.0:
+            return (int(round(global_x)), int(round(global_y)))
+        origin = self.target_screen.geometry().topLeft()
+        return (int(round(origin.x() + (global_x - origin.x()) * scale)),
+                int(round(origin.y() + (global_y - origin.y()) * scale)))
+
+    def _local_from_engine(self, x: float, y: float) -> Tuple[float, float]:
+        """Returns the overlay position of click-step coordinates (x, y)."""
+        origin = self.target_screen.geometry().topLeft() if self.target_screen else QPoint(0, 0)
+        scale = self._physical_scale()
+        return ((x - origin.x()) / scale, (y - origin.y()) / scale)
+
     def update_cursor_position(
         self,
         local_x: int,
@@ -278,20 +315,19 @@ class CoordinatePickerOverlay(QWidget):
         global_x: Optional[int] = None,
         global_y: Optional[int] = None,
     ) -> None:
-        """Updates internal cursor tracking coordinates and queries pixel color."""
+        """Updates internal cursor tracking coordinates and queries pixel color.
+
+        ``global_x``/``global_y`` are click-step coordinates (what a pick returns); without
+        them they are worked out from the overlay position.
+        """
         self.current_local_x = int(round(local_x))
         self.current_local_y = int(round(local_y))
 
-        if global_x is not None and global_y is not None:
-            self.current_global_x = int(round(global_x))
-            self.current_global_y = int(round(global_y))
-        elif self.target_screen:
-            s_geom = self.target_screen.geometry()
-            self.current_global_x = self.current_local_x + s_geom.x()
-            self.current_global_y = self.current_local_y + s_geom.y()
-        else:
-            self.current_global_x = self.current_local_x
-            self.current_global_y = self.current_local_y
+        if global_x is None or global_y is None:
+            origin = self.target_screen.geometry().topLeft() if self.target_screen else QPoint(0, 0)
+            global_x, global_y = self._engine_from_global(origin.x() + local_x, origin.y() + local_y)
+        self.current_global_x = int(round(global_x))
+        self.current_global_y = int(round(global_y))
 
         # Query pixel color at cursor
         self.current_rgb = self._query_pixel_color(self.current_local_x, self.current_local_y)
@@ -329,15 +365,13 @@ class CoordinatePickerOverlay(QWidget):
         """Handles mouse hover events to update crosshairs, HUD, and magnifier."""
         loc = event.position()
         glob = event.globalPosition()
-        self.update_cursor_position(loc.x(), loc.y(), glob.x(), glob.y())
+        self.update_cursor_position(loc.x(), loc.y(), *self._engine_from_global(glob.x(), glob.y()))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handles mouse click selection (Left) and cancellation (Right)."""
         if event.button() == Qt.MouseButton.LeftButton:
             glob = event.globalPosition()
-            gx = int(round(glob.x()))
-            gy = int(round(glob.y()))
-            self._finish_selection(gx, gy)
+            self._finish_selection(*self._engine_from_global(glob.x(), glob.y()))
         elif event.button() == Qt.MouseButton.RightButton:
             self._finish_cancellation()
 
@@ -605,11 +639,8 @@ class CoordinatePickerOverlay(QWidget):
     # -------------------------------------------------------------------------
 
     def simulate_mouse_move(self, x: int, y: int) -> None:
-        """Simulates cursor hover movement to global coordinates (x, y)."""
-        s_geom_x = self.target_screen.geometry().x() if self.target_screen else 0
-        s_geom_y = self.target_screen.geometry().y() if self.target_screen else 0
-        local_x = x - s_geom_x
-        local_y = y - s_geom_y
+        """Simulates cursor hover movement to click-step coordinates (x, y)."""
+        local_x, local_y = self._local_from_engine(x, y)
         self.update_cursor_position(local_x, local_y, x, y)
 
     def simulate_click(self, x: int, y: int, button: str = "left") -> None:
@@ -624,7 +655,7 @@ class CoordinatePickerOverlay(QWidget):
         self._finish_cancellation()
 
     def get_current_coordinates(self) -> Tuple[int, int]:
-        """Returns the currently tracked global coordinates (X, Y)."""
+        """Returns the currently tracked click-step coordinates (X, Y)."""
         return (self.current_global_x, self.current_global_y)
 
     def get_current_pixel_color(self) -> Tuple[int, int, int]:

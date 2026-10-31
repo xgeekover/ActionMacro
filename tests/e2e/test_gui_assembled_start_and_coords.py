@@ -45,6 +45,7 @@ from action_macro.core.models import (
     ScenarioModel,
 )
 from action_macro.core.persistence import ScenarioPersistence
+from action_macro.gui import coordinate_picker
 from action_macro.gui.coordinate_picker import CoordinatePickerOverlay
 from action_macro.gui.main_window import MainWindow
 
@@ -382,6 +383,9 @@ def test_negative_picker_coordinate_reaches_engine_click(
     make_window, os_boundary: OsBoundaryRecorder, qtbot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A pick on a monitor at (-3840, -2160) keeps its negative coordinates end to end."""
+    # Qt points are the click coordinates here (macOS). Windows picks physical pixels, which
+    # the scaled fake monitor would turn into other numbers: test_gui_coordinate_picker.py.
+    monkeypatch.setattr(coordinate_picker, "PICKS_PHYSICAL_PIXELS", False)
     primary = QGuiApplication.primaryScreen()
     left_top = _FakeSecondaryScreen(QRect(-3840, -2160, 3840, 2160))
     monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, left_top]))
