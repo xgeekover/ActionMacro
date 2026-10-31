@@ -270,6 +270,10 @@ QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/
 QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/unit/
 ```
 
+main 에 올리거나 PR 을 열면 GitHub Actions(`.github/workflows/tests.yml`)가 테스트를 돌립니다.
+- **Windows**: 전체 테스트를 돌린 뒤, offscreen 에서 드러나지 않는 레이아웃·글꼴 검사를 실제 Qt 플러그인(`windows`)으로 한 번 더 돌립니다. 실패한 테스트는 한 번 다시 돌리고, 다시 돌려서 통과한 테스트는 경고로 남깁니다.
+- **macOS**: 레이아웃·글꼴 검사만 실제 플러그인(`cocoa`)으로 돌립니다. macOS 러너(CPU 3개짜리 VM)는 잠든 스레드를 25~75ms 늦게 깨워(실제 Mac 은 5~10ms) 정지 지연 검사가 매번 실패하므로, 전체 테스트는 실제 Mac 에서 위 명령으로 돌립니다.
+
 ---
 
 ## 📄 라이선스 (License)
