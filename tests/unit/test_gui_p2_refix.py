@@ -450,6 +450,24 @@ def test_buttons_honour_the_28_and_32_pixel_heights(window):
     assert win.property_inspector.form_image.btn_browse.height() == theme.CONTROL_HEIGHT_SM
 
 
+def test_styled_inspector_spin_boxes_are_pinned_to_the_line_edit_height(qtbot):
+    """Offscreen a styled spin box is 32 px by itself, but with the real macOS and Windows
+    plugins it is 30 px next to 32 px line edits, because polishing with the style sheet
+    resets its minimum height. So the pinned range after polishing is what is checked."""
+    from PySide6.QtWidgets import QAbstractSpinBox
+
+    inspector = PropertyInspector()
+    qtbot.addWidget(inspector)
+    inspector.setStyleSheet(theme.build_stylesheet())
+    inspector.show()
+    qtbot.waitExposed(inspector)
+    spins = inspector.findChildren(QAbstractSpinBox)
+    assert len(spins) >= 10
+    for spin in spins:
+        spin.ensurePolished()
+        assert (spin.minimumHeight(), spin.maximumHeight()) == (theme.CONTROL_HEIGHT,) * 2, spin
+
+
 @pytest.mark.parametrize("size", [(1600, 1000), (1400, 900), (1100, 680)])
 def test_empty_state_tile_titles_share_a_baseline(window, size):
     win = window(scenario=ScenarioModel(name="Empty"), size=size)
