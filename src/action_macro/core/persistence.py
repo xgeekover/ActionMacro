@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from action_macro.core.models import (
@@ -91,7 +92,15 @@ def to_posix_relative_path(path_str: str, base_dir: Path) -> str:
 def resolve_template_path(template_path: str, scenario_path: Union[str, Path]) -> Path:
     """
     Resolves a relative POSIX template path against the scenario directory.
+
+    On Windows an absolute path (``C:\\...``, ``C:/...``, ``\\\\server\\share\\...``) is used
+    as it is: split into POSIX parts it would become a drive-relative path (``C:Users``)
+    joined under the scenario folder. Such paths come from Browse or drag-and-drop after
+    the scenario was saved, and from saving a template that is on another drive.
     """
+    if sys.platform == "win32" and PureWindowsPath(template_path).is_absolute():
+        return Path(template_path).resolve()
+
     scen_p = Path(scenario_path).resolve()
     base_dir = scen_p.parent if (scen_p.is_file() or scen_p.suffix == ".json") else scen_p
 
