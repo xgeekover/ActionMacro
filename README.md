@@ -270,6 +270,8 @@ QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/
 QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/unit/
 ```
 
+main 에 올리거나 PR 을 열면 GitHub Actions(`.github/workflows/tests.yml`)가 같은 테스트를 macOS(Apple Silicon)와 Windows 에서 돌립니다. offscreen 에서 드러나지 않는 레이아웃·글꼴 검사는 실제 Qt 플러그인(`cocoa`, `windows`)으로 한 번 더 돌립니다.
+
 ---
 
 ## 📄 라이선스 (License)

@@ -1,0 +1,80 @@
+name: Tests
+
+# Runs the automated tests on macOS (Apple Silicon) and Windows for every push to main and
+# every pull request. OS input and screen capture are faked, so this does not replace the
+# real-device checks in tools/. The offscreen Qt plugin hides some layout and font problems
+# (spin boxes are 32 px offscreen but 30 px on screen; Windows offscreen has no system
+# fonts), so those checks run a second time with the real platform plugin.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Tests ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            label: macos-arm64
+            platform_plugin: cocoa
+            # "unstyled" clears only the style sheet; run alone it then gets the native
+            # macOS style, which the app never uses (apply_theme always sets the Fusion
+            # based AppStyle) and which is 9 px wider than the panel at 1100x680.
+            platform_args: -k "not unstyled"
+          - os: windows-latest
+            label: windows-x64
+            platform_plugin: windows
+            platform_args: ""
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        shell: bash
+        run: uv sync --frozen --all-extras
+
+      - name: pytest (offscreen)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --no-sync pytest -p no:cacheprovider -rfEs --junitxml=junit-${{ matrix.label }}.xml
+
+      - name: pytest (${{ matrix.platform_plugin }} platform plugin, layout and fonts)
+        if: always()
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: ${{ matrix.platform_plugin }}
+        run: >-
+          uv run --no-sync pytest -p no:cacheprovider -rfEs
+          --junitxml=junit-${{ matrix.label }}-${{ matrix.platform_plugin }}.xml ${{ matrix.platform_args }}
+          "tests/unit/test_gui_p2_inspector.py::test_inspector_fits_the_panel_without_sideways_overflow"
+          "tests/unit/test_gui_p2_refix.py::test_buttons_honour_the_28_and_32_pixel_heights"
+          "tests/unit/test_gui_p2_refix.py::test_styled_inspector_spin_boxes_are_pinned_to_the_line_edit_height"
+          "tests/unit/test_gui_theme_icons.py::test_fonts_are_platform_fonts"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.label }}
+          path: junit-*.xml
+          retention-days: 14
