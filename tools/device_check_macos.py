@@ -162,8 +162,9 @@ def select_input_source(source_id: str) -> bool:
 # --------------------------------------------------------------------------- safety checks
 
 #: System overlays that cover a whole display but let clicks through (Dock 20, Notification
-#: Center 21). Menu bar / status items (24/25) stay blockers; targets never sit there.
-CLICK_THROUGH_LAYERS = {20, 21}
+#: Center 21, and 23 on macOS 27, where it covers the main display all the time). Menu bar /
+#: status items (24/25) stay blockers; targets never sit there.
+CLICK_THROUGH_LAYERS = {20, 21, 23}
 
 
 def window_owner_at(x: float, y: float) -> Tuple[Optional[int], Optional[str], Optional[int]]:
