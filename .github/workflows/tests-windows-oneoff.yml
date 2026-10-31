@@ -1,0 +1,41 @@
+name: Tests (Windows, one-off)
+
+# Temporary: runs the test suite on a Windows runner for test/windows-0.1.1 only, to list
+# the tests that fail on Windows. Removed again before the branch is merged.
+
+on:
+  push:
+    branches: ["test/windows-0.1.1"]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        shell: bash
+        run: uv sync --frozen --all-extras
+
+      - name: pytest
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: uv run --no-sync pytest -p no:cacheprovider -rfEs --junitxml=junit-windows.xml
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-windows
+          path: junit-windows.xml
+          retention-days: 7
