@@ -46,3 +46,5 @@ ehthumbs.db
 # Real-device check reports (tools/)
 device_check_report.json*
 device_check_hotkeys_report.json
+device_check_image_report.json*
+device_check_image_template_*.png
