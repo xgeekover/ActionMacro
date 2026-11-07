@@ -5,18 +5,21 @@ Window chrome of the main window: the top bar and the left navigation rail.
 
 * :class:`TopBar` - app mark, the menus (Windows/Linux only, see
   :meth:`TopBar.set_menu_bar`), the open document (file name and save state), a
-  slot for a permissions warning and the "More" menu button.
+  slot for a permissions warning and the "More" menu button. On macOS it is also
+  the window's title bar (:meth:`TopBar.set_leading_space`,
+  :meth:`TopBar.enable_window_drag`; see ``macos_title_bar``).
 * :class:`NavRail` - a 48 px icon-only rail whose buttons are bound to checkable
   ``QAction`` objects (toggle the scenario sidebar / the console) plus a menu button.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtGui import QAction, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -36,13 +39,21 @@ from action_macro.gui.components import ElidedLabel, Separator, StatusDot, make_
 class TopBar(QFrame):
     """Application header: mark, menus, document name + save state, permissions, "More"."""
 
+    #: Left padding when nothing sits at the bar's left end.
+    LEFT_MARGIN = 14
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
         self.setFixedHeight(theme.TOP_BAR_HEIGHT)
 
+        # Title bar behaviour (enable_window_drag): off until the window asks for it.
+        self._window_drag = False
+        self._on_double_click: Optional[Callable[[], None]] = None
+        self._press_pos: Optional[QPoint] = None
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 10, 0)
+        layout.setContentsMargins(self.LEFT_MARGIN, 0, 10, 0)
         layout.setSpacing(theme.SPACE_SM)
 
         self.lbl_mark = QLabel()
@@ -113,6 +124,96 @@ class TopBar(QFrame):
         self._menu_slot.addSpacing(theme.SPACE_SM)
         self._menu_slot.addWidget(menu_bar, 0, Qt.AlignmentFlag.AlignVCenter)
         self.menu_bar = menu_bar
+
+    def set_leading_space(self, width: int) -> None:
+        """Keeps the bar's first ``width`` px clear; 0 restores the normal margin.
+
+        On macOS the window's traffic-light buttons sit there (see ``macos_title_bar``).
+        """
+        margins = self.layout().contentsMargins()
+        margins.setLeft(max(width, self.LEFT_MARGIN))
+        self.layout().setContentsMargins(margins)
+
+    def fit_title_bar(self, height: int, centre: Optional[float] = None) -> None:
+        """Makes the bar ``height`` px tall with its items centred on ``centre``.
+
+        ``centre`` is measured from the bar's top (the macOS window buttons' centre),
+        so the items line up with the buttons despite the bar's bottom border. None
+        centres them in the bar as usual.
+        """
+        self.setFixedHeight(height)
+        shift = 0
+        if centre is not None:
+            self.ensurePolished()  # contentsRect() must exclude the style sheet border
+            rect = self.contentsRect()
+            shift = round(2 * (centre - rect.top()) - rect.height())
+        margins = self.layout().contentsMargins()
+        margins.setTop(max(shift, 0))
+        margins.setBottom(max(-shift, 0))
+        self.layout().setContentsMargins(margins)
+
+    def leading_space(self) -> int:
+        """Returns the bar's left padding (the normal margin or the space kept clear)."""
+        return self.layout().contentsMargins().left()
+
+    def enable_window_drag(self, on_double_click: Optional[Callable[[], None]] = None) -> None:
+        """Makes the bar's empty space act as the window's title bar.
+
+        Dragging it moves the window, and a double click calls ``on_double_click``.
+        The move starts once the pointer has travelled the drag distance, so a plain
+        click or a double click is never swallowed by it. Buttons keep their own
+        clicks; labels let them through to the bar.
+        """
+        self._window_drag = True
+        self._on_double_click = on_double_click
+
+    def disable_window_drag(self) -> None:
+        """Undoes :meth:`enable_window_drag` (the window has its normal title bar again)."""
+        self._window_drag = False
+        self._on_double_click = None
+        self._press_pos = None
+
+    def is_window_drag_enabled(self) -> bool:
+        """True when the bar's empty space moves the window (see :meth:`enable_window_drag`)."""
+        return self._window_drag
+
+    def _start_window_move(self) -> bool:
+        """Hands the move to the window system; False when it cannot move windows."""
+        handle = self.window().windowHandle()
+        return bool(handle is not None and handle.startSystemMove())
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+        if self._window_drag and event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+        if self._press_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            travelled = (event.position().toPoint() - self._press_pos).manhattanLength()
+            if travelled >= QApplication.startDragDistance():
+                self._press_pos = None
+                self._start_window_move()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+        if self._press_pos is not None and event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
+        if self._window_drag and event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = None
+            if self._on_double_click is not None:
+                self._on_double_click()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def set_document(self, file_name: Optional[str], *, dirty: bool, tooltip: str = "") -> None:
         """Shows the open file name (or "Not saved yet") and its save state."""

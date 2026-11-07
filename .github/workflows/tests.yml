@@ -3,12 +3,12 @@ name: Tests
 # Runs for every push to main and every pull request. OS input and screen capture are
 # faked, so this does not replace the real-device checks in tools/.
 #
-# - Windows: the whole suite offscreen, then the layout and font checks again with the real
-#   platform plugin (spin boxes are 32 px offscreen but 30 px on screen, and Windows
-#   offscreen has no system fonts).
-# - macOS: only those layout and font checks, with the real cocoa plugin. The whole suite is
-#   run on a real Mac instead: on the macos-15 runner (a 3-CPU VM) threads wake 25-75 ms
-#   late (5-10 ms on a real Mac), so the 25-150 ms stop-latency budgets fail every run.
+# - Windows: the whole suite offscreen, then the layout, font and title bar checks again with
+#   the real platform plugin (spin boxes are 32 px offscreen but 30 px on screen, Windows
+#   offscreen has no system fonts, and the macOS title bar needs AppKit).
+# - macOS: only those checks, with the real cocoa plugin. The whole suite is run on a real
+#   Mac instead: on the macos-15 runner (a 3-CPU VM) threads wake 25-75 ms late (5-10 ms
+#   on a real Mac), so the 25-150 ms stop-latency budgets fail every run.
 
 on:
   push:
@@ -78,7 +78,7 @@ jobs:
           fi
           exit "$status"
 
-      - name: pytest (${{ matrix.platform_plugin }} platform plugin, layout and fonts)
+      - name: pytest (${{ matrix.platform_plugin }} platform plugin, layout, fonts, title bar)
         if: always()
         shell: bash
         env:
@@ -90,6 +90,7 @@ jobs:
           "tests/unit/test_gui_p2_refix.py::test_buttons_honour_the_28_and_32_pixel_heights"
           "tests/unit/test_gui_p2_refix.py::test_styled_inspector_spin_boxes_are_pinned_to_the_line_edit_height"
           "tests/unit/test_gui_theme_icons.py::test_fonts_are_platform_fonts"
+          "tests/unit/test_gui_title_bar.py"
 
       - uses: actions/upload-artifact@v4
         if: always()
