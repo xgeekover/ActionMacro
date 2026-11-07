@@ -19,6 +19,8 @@ Layout (Postman-style workspace with a Docker-style status bar)::
 
 The menu bar and its QActions stay. On macOS the menus live in the screen's global
 menu bar; on Windows/Linux they are shown inside the top bar (one header row).
+On macOS the top bar is also the title bar: the content runs under it and the
+traffic-light buttons sit at the top bar's left end (see ``macos_title_bar``).
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QSettings, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QFontMetrics, QKeySequence, QShowEvent
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -55,7 +57,7 @@ from action_macro.core.models import (
 )
 from action_macro.core.persistence import ScenarioPersistence, resolve_template_path, to_posix_relative_path
 from action_macro.engine import macos_permissions
-from action_macro.gui import icons, step_text, theme
+from action_macro.gui import icons, macos_title_bar, step_text, theme
 from action_macro.gui.chrome import NavRail, TopBar
 from action_macro.gui.components import (
     ElidedLabel,
@@ -140,6 +142,13 @@ class MainWindow(QMainWindow):
         self._setup_signals()
         self._setup_permissions(permission_checker)
         self._sync_initial_selection()
+
+        # macOS: one header row. The top bar takes the title bar's place; AppKit is
+        # finished on show (_merge_title_bar), the flags must be set before it.
+        self._title_bar_band: Optional[macos_title_bar.TitleBarBand] = None
+        self._merges_title_bar = macos_title_bar.supported()
+        if self._merges_title_bar:
+            macos_title_bar.request_expanded_client_area(self)
 
         self._update_window_title()
 
@@ -890,13 +899,50 @@ class MainWindow(QMainWindow):
             return False
 
     def showEvent(self, event: QShowEvent) -> None:
-        """Gives the step list the initial keyboard focus (not the first chrome button)."""
+        """Finishes the macOS title bar and gives the step list the initial keyboard focus."""
         super().showEvent(event)
+        if self._merges_title_bar:
+            self._merge_title_bar()
         if not self._initial_focus_done:
             self._initial_focus_done = True
             step_list = getattr(self.scenario_builder, "list_widget", None)
             target = step_list if step_list is not None and step_list.isVisible() else self.editor_panel
             target.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _merge_title_bar(self) -> None:
+        """Makes the top bar the window's title bar (macOS, see ``macos_title_bar``)."""
+        band = macos_title_bar.finish(self)
+        if band is None:
+            # AppKit did not take it: bring the normal title bar back rather than leave
+            # its text and buttons over the top bar. Flags cannot change inside showEvent.
+            self._merges_title_bar = False
+            QTimer.singleShot(0, self._restore_native_title_bar)
+            return
+        self._title_bar_band = band
+        self.top_bar.fit_title_bar(band.height, band.controls_centre)
+        self.top_bar.enable_window_drag(lambda: macos_title_bar.double_click_title_bar(self))
+        self._sync_title_bar_lead()
+
+    def _restore_native_title_bar(self) -> None:
+        self._title_bar_band = None
+        macos_title_bar.release_expanded_client_area(self)
+        self.top_bar.fit_title_bar(theme.TOP_BAR_HEIGHT)
+        self.top_bar.set_leading_space(0)
+        self.show()
+
+    def _sync_title_bar_lead(self) -> None:
+        """Keeps the traffic-light buttons' corner clear, except in full screen."""
+        band = self._title_bar_band
+        if band is None:
+            return
+        # In full screen the buttons leave with the title bar (it slides in with the menu bar).
+        full_screen = bool(self.windowState() & Qt.WindowState.WindowFullScreen)
+        self.top_bar.set_leading_space(0 if full_screen else band.controls_right + macos_title_bar.LEAD_GAP)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_title_bar_lead()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Safely cleans up runner threads and confirms unsaved changes on close."""
