@@ -9,6 +9,7 @@ scenario top to bottom without opening the inspector::
     Click left at (1280, 720)
     Double-click left at (640, 360)
     Click right 3 times at (10, 20), 100 ms apart
+    Click left at the found image
     Press ⌘ + C                (Ctrl + C on Windows and Linux)
     Hold down ⇧                (Shift)
     Release ⇧
@@ -107,11 +108,17 @@ def format_duration_ms(duration_ms: int) -> str:
 
 
 def click_summary(params: Any) -> str:
-    """``Click left at (x, y)``, ``Double-click left at (x, y)``, ``Click right 3 times at (x, y), 100 ms apart``."""
+    """``Click left at (x, y)``, ``Double-click left at (x, y)``, ``Click right 3 times at (x, y), 100 ms apart``.
+
+    A step that clicks the found image reads ``Click left at the found image``.
+    """
     button = str(_param(params, "button", "left") or "left").strip().lower()
     clicks = int(_param(params, "clicks", 1) or 1)
     interval_ms = int(_param(params, "interval_ms", 0) or 0)
-    point = f"({_param(params, 'x', 0)}, {_param(params, 'y', 0)})"
+    if _param(params, "use_last_matched", False):
+        point = "the found image"
+    else:
+        point = f"({_param(params, 'x', 0)}, {_param(params, 'y', 0)})"
     if clicks == 1:
         return f"Click {button} at {point}"
     sentence = f"Double-click {button} at {point}" if clicks == 2 else f"Click {button} {clicks} times at {point}"

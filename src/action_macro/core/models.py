@@ -188,13 +188,19 @@ class _ParamBase:
 
 @dataclass
 class MouseClickParams(_ParamBase):
-    """Parameters for MOUSE_CLICK action."""
+    """Parameters for MOUSE_CLICK action.
+
+    ``use_last_matched`` clicks the centre of the image that the last Image wait step
+    of the run found, instead of (``x``, ``y``). ``x`` and ``y`` are kept, so turning
+    it off again restores the point.
+    """
     x: int
     y: int
     button: str = "left"
     clicks: int = 1
     interval_ms: int = 0
     press_duration_ms: int = 50
+    use_last_matched: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.x, int) or isinstance(self.x, bool):
@@ -226,6 +232,19 @@ class MouseClickParams(_ParamBase):
             raise TypeError(f"MouseClickParams.press_duration_ms must be an int, got {type(self.press_duration_ms).__name__}")
         if self.press_duration_ms < 0:
             raise ValueError(f"MouseClickParams.press_duration_ms must be an integer >= 0, got {self.press_duration_ms!r}")
+
+        if not isinstance(self.use_last_matched, bool):
+            raise TypeError(
+                f"MouseClickParams.use_last_matched must be a bool, got {type(self.use_last_matched).__name__}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        # Written only when set, so every other click step is saved exactly as before
+        # and stays readable by versions that do not know the field (0.1.3 and earlier).
+        if not self.use_last_matched:
+            d.pop("use_last_matched", None)
+        return d
 
 
 @dataclass

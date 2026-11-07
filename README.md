@@ -169,6 +169,9 @@ ActionMacro --headless my_scenario.json --loops 0
 ### Step 1. 액션 블록 구성 (Visual Builder)
 1. 프로그램 상단의 버튼을 눌러 원하는 액션을 시나리오에 추가합니다:
    - **`+ Add Mouse Click`**: 지정 좌표를 클릭합니다 (좌클릭, 우클릭, 더블클릭, 클릭 유지 시간 등 지원).
+     - **찾은 이미지 누르기**: 속성 패널의 `Target position`에서 **`Found image`**를 고르면, 좌표 대신 이번 실행에서 마지막으로 Image Wait 단계가 찾은 이미지의 가운데를 누릅니다. 버튼 이미지를 기다렸다가 그 버튼을 누를 때 좌표를 따로 찍지 않아도 됩니다. 카드에는 `Click left at the found image`처럼 보입니다.
+       - 아직 찾은 이미지가 없으면 아무 데도 누르지 않고 콘솔에 경고를 남깁니다. 앞에 Image Wait 단계가 없거나, 나타나기를 기다린 이미지가 시간 안에 나오지 않아 `skip`으로 넘어온 경우입니다.
+       - 이 설정을 쓴 시나리오는 0.1.3 이하에서 열리지 않습니다. 쓰지 않은 Mouse Click 단계는 전처럼 저장됩니다.
    - **`+ Add Key Input`**: 특정 키 입력 또는 단축키 조합(예: `ctrl+c`, `cmd_or_ctrl+shift+t`, `enter`, `f5`)을 실행합니다.
      - `+`로 이은 키는 **하나의 단축키로 동시에** 눌립니다: 앞의 키들을 순서대로 누른 채 마지막 키를 `Press Duration`만큼 누르고, 역순으로 뗍니다. (예: `ctrl+c` → Ctrl 누름 → C 누름 → C 뗌 → Ctrl 뗌)
      - `Action Mode`: `press`는 한 번 누르고 떼기, `down`은 모든 키를 순서대로 누른 채 유지, `up`은 그 키들을 역순으로 뗍니다. (예: `down shift` → 마우스 클릭 → `up shift`로 Shift+클릭)
@@ -203,7 +206,7 @@ ActionMacro --headless my_scenario.json --loops 0
 
 #### B. 스마트 이미지 인식 대기 (Image Wait)
 - **동작 모드**:
-  - `appear` (나타날 때까지 대기): 전투 완료 화면, 승리 팝업, 확인 버튼 등이 화면에 뜰 때까지 대기
+  - `appear` (나타날 때까지 대기): 전투 완료 화면, 승리 팝업, 확인 버튼 등이 화면에 뜰 때까지 대기. 찾은 위치를 누르려면 다음 Mouse Click 단계의 `Target position`을 `Found image`로 둡니다(Step 1 참고).
   - `disappear` (사라질 때까지 대기): 로딩 화면이나 쿨타임 표시가 사라질 때까지 대기
 - **설정 항목**:
   - `Template Image`: 인식할 버튼/아이콘의 PNG 이미지 경로

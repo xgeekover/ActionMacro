@@ -418,6 +418,7 @@ class ExecutionEngine:
             return False
 
         self.set_state(EngineState.RUNNING)
+        self._last_detected_coords = None  # a "found image" click never reuses an earlier run's match
         total_actions = len(self.scenario.actions)
         loop_target = self.scenario.loop_count  # 0 indicates infinite
 
@@ -539,8 +540,15 @@ class ExecutionEngine:
             x = p.get("x", 0)
             y = p.get("y", 0)
 
-            # Dynamic coordinate routing from prior image match
-            if p.get("use_last_matched", False) and self._last_detected_coords is not None:
+            # Click where the last Image wait step found its image
+            if p.get("use_last_matched", False):
+                if self._last_detected_coords is None:
+                    # Nothing found yet in this run (no Image wait before this step, or it
+                    # timed out and the run went on): click nowhere rather than at (x, y).
+                    self.signals.emit_log(
+                        "WARNING", "Click skipped: no image has been found yet in this run"
+                    )
+                    return True
                 x, y = self._last_detected_coords
 
             button = p.get("button", "left")
@@ -645,6 +653,10 @@ class ExecutionEngine:
             )
             if matched and coords:
                 self._last_detected_coords = coords
+            elif not matched and str(getattr(iwp.mode, "value", iwp.mode)).lower() == "appear":
+                # The image did not appear (timed out, run goes on): forget the older
+                # match, so a "found image" click does not land where an earlier image was.
+                self._last_detected_coords = None
             return matched
 
         return False

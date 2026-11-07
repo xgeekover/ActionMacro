@@ -92,6 +92,10 @@ COORD_HELP = (
     "Screen position in logical points; negative values reach monitors left of "
     "or above the main one."
 )
+FOUND_IMAGE_HELP = (
+    "Clicks the centre of the image the last Image wait step found in this run. "
+    "If none has been found yet, the click is skipped."
+)
 KEYS_HELP = "Join keys with + to press them together, e.g. ctrl+c or cmd_or_ctrl+shift+t."
 TEXT_HELP = (
     "Typed one character at a time into the window that has the keyboard focus. Click "
@@ -328,28 +332,42 @@ class MouseClickForm(_FormPage):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(_SECTION_GAP)
 
-        # Target position
+        # Target position: a point on the screen, or the image the last Image wait found
         target = _Section("Target position")
+        self.combo_target = _hidden_combo(target, ["point", "found"])
+        self.seg_target = SegmentedControl([
+            ("point", "Point", "Click a fixed point on the screen."),
+            ("found", "Found image", "Click the centre of the image the last Image wait step found."),
+        ])
+        self.seg_target.bind_combo(self.combo_target)
+        target.add_row(self.seg_target)
+
         self.spin_x = _spin(COORD_MIN, COORD_MAX, mono=True)
         self.spin_x.setToolTip(COORD_TOOLTIP)
         self.spin_x.valueChanged.connect(self._on_changed)
         self.spin_y = _spin(COORD_MIN, COORD_MAX, mono=True)
         self.spin_y.setToolTip(COORD_TOOLTIP)
         self.spin_y.valueChanged.connect(self._on_changed)
-        target.add_row(_pair(_field("X", self.spin_x), _field("Y", self.spin_y)))
+        self.row_point = _pair(_field("X", self.spin_x), _field("Y", self.spin_y))
+        target.add_row(self.row_point)
         self.lbl_coord_help = _help_label(COORD_HELP)
         target.add_row(self.lbl_coord_help, gap=theme.SPACE_SM - 2)
+        self.lbl_found_help = _help_label(FOUND_IMAGE_HELP)
+        target.add_row(self.lbl_found_help, gap=theme.SPACE_SM - 2)
 
         self.btn_pick = QPushButton("Pick from screen")
         style_button(self.btn_pick, "secondary", "crosshair", icon_px=14)
         self.btn_pick.setToolTip(with_shortcut("Pick a point on the screen", PICK_SHORTCUT))
         self.btn_pick.clicked.connect(self.pick_requested.emit)
-        pick_row = QHBoxLayout()
+        self.row_pick = QWidget()
+        pick_row = QHBoxLayout(self.row_pick)
         pick_row.setContentsMargins(0, 0, 0, 0)
         pick_row.addWidget(self.btn_pick)
         pick_row.addStretch(1)
-        target.add_row(pick_row)
+        target.add_row(self.row_pick)
         layout.addWidget(target)
+        self.combo_target.currentIndexChanged.connect(self._sync_target)
+        self.combo_target.currentIndexChanged.connect(self._on_changed)
 
         # Click options
         click = _Section("Click")
@@ -377,9 +395,21 @@ class MouseClickForm(_FormPage):
         click.add_row(_pair(_field("Press duration", self.spin_duration)))
         layout.addWidget(click)
         layout.addStretch()
+        self._sync_target()
+
+    def uses_found_image(self) -> bool:
+        """True when the step clicks the image the last Image wait found, not (X, Y)."""
+        return self.combo_target.currentText() == "found"
+
+    def _sync_target(self, *_args: object) -> None:
+        found = self.uses_found_image()
+        for widget in (self.row_point, self.lbl_coord_help, self.row_pick):
+            widget.setVisible(not found)
+        self.lbl_found_help.setVisible(found)
 
     def set_values(self, params: Any) -> None:
         self._block_signals = True
+        self.combo_target.setCurrentIndex(1 if params.get("use_last_matched", False) else 0)
         self.spin_x.setValue(int(params["x"]))
         self.spin_y.setValue(int(params["y"]))
         btn_str = str(params.get("button", "left")).lower()
@@ -399,9 +429,12 @@ class MouseClickForm(_FormPage):
             clicks=self.spin_clicks.value(),
             interval_ms=self.spin_interval.value(),
             press_duration_ms=self.spin_duration.value(),
+            use_last_matched=self.uses_found_image(),
         )
 
     def set_coordinates(self, x: int, y: int) -> None:
+        """Takes a picked point; the step then clicks that point (not the found image)."""
+        self.combo_target.setCurrentIndex(0)
         self.spin_x.setValue(x)
         self.spin_y.setValue(y)
 
