@@ -15,10 +15,12 @@ buttons near its top and the window title still drawn over the content, so AppKi
   menu, Mission Control and the Dock;
 * no separator line under the title bar, because the top bar draws its own border.
 
-Clicks in the title bar band reach the Qt widgets (only the three buttons stay
-AppKit's), so the top bar moves the window itself (see ``TopBar.enable_window_drag``)
-and a double click does what System Settings > Desktop & Dock asks for
-(:func:`double_click_title_bar`).
+On macOS 27 clicks in the title bar band reach the Qt widgets (only the three
+buttons stay AppKit's), so the top bar moves the window itself (see
+``TopBar.enable_window_drag``) and a double click does what System Settings > Desktop
+& Dock asks for (:func:`double_click_title_bar`). On macOS 15 the toolbar view keeps
+those clicks, so the top bar's buttons would not work: :func:`band_click_target`
+tells, and the window then goes back to the normal title bar (:func:`undo`).
 """
 
 from __future__ import annotations
@@ -36,6 +38,11 @@ from PySide6.QtWidgets import QWidget
 
 #: Gap between the zoom (green) button and the first item of the top bar.
 LEAD_GAP = 12
+
+#: :func:`band_click_target` results.
+CLICKS_REACH_CONTENT = "content"
+CLICKS_STAY_IN_TITLE_BAR = "title bar"
+CLICKS_NOT_PLACED_YET = "pending"
 
 _TOOLBAR_ID = "ActionMacroTitleBar"
 
@@ -140,6 +147,55 @@ def finish(window: QWidget) -> Optional[TitleBarBand]:
         return _band(appkit, native)
     except Exception:  # an AppKit call failed: keep the normal title bar
         return None
+
+
+def band_click_target(window: QWidget, band: TitleBarBand) -> str:
+    """Where AppKit sends a click in the band beside the buttons (no input is sent).
+
+    Returns :data:`CLICKS_REACH_CONTENT` when the Qt view gets it (macOS 27),
+    :data:`CLICKS_STAY_IN_TITLE_BAR` when a title bar view keeps it (the toolbar view
+    on macOS 15, where the top bar's buttons would be dead), or
+    :data:`CLICKS_NOT_PLACED_YET` while AppKit has not laid the window out yet (still
+    the case in the first showEvent): ask again later.
+    """
+    modules = _appkit()
+    native = ns_window(window) if modules is not None else None
+    if native is None:
+        return CLICKS_STAY_IN_TITLE_BAR
+    appkit, _ = modules
+    try:
+        frame_view = native.contentView().superview()
+        content = native.contentView()
+        size = native.frame().size
+        y = size.height - band.height / 2  # AppKit window coordinates: origin bottom left
+        result = CLICKS_REACH_CONTENT
+        for x in (band.controls_right + 4 * LEAD_GAP, size.width - 2 * LEAD_GAP):
+            hit = frame_view.hitTest_(appkit.NSMakePoint(x, y))
+            if hit is None or hit == frame_view:
+                result = CLICKS_NOT_PLACED_YET
+            elif not (hit == content or hit.isDescendantOf_(content)):
+                return CLICKS_STAY_IN_TITLE_BAR
+        return result
+    except Exception:  # an AppKit call failed: assume the clicks do not get through
+        return CLICKS_STAY_IN_TITLE_BAR
+
+
+def undo(window: QWidget) -> None:
+    """Takes back what :func:`finish` did (the toolbar, the hidden title, no separator)."""
+    modules = _appkit()
+    native = ns_window(window) if modules is not None else None
+    if native is None:
+        return
+    appkit, _ = modules
+    try:
+        toolbar = native.toolbar()
+        if toolbar is not None and toolbar.identifier() == _TOOLBAR_ID:
+            native.setToolbar_(None)
+        native.setToolbarStyle_(appkit.NSWindowToolbarStyleAutomatic)
+        native.setTitleVisibility_(appkit.NSWindowTitleVisible)
+        native.setTitlebarSeparatorStyle_(appkit.NSTitlebarSeparatorStyleAutomatic)
+    except Exception:  # best effort: the flags are dropped either way
+        pass
 
 
 def _band(appkit: Any, native: Any) -> Optional[TitleBarBand]:

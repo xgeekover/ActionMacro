@@ -167,6 +167,12 @@ class TopBar(QFrame):
         self._window_drag = True
         self._on_double_click = on_double_click
 
+    def disable_window_drag(self) -> None:
+        """Undoes :meth:`enable_window_drag` (the window has its normal title bar again)."""
+        self._window_drag = False
+        self._on_double_click = None
+        self._press_pos = None
+
     def is_window_drag_enabled(self) -> bool:
         """True when the bar's empty space moves the window (see :meth:`enable_window_drag`)."""
         return self._window_drag

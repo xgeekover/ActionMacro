@@ -913,21 +913,45 @@ class MainWindow(QMainWindow):
         """Makes the top bar the window's title bar (macOS, see ``macos_title_bar``)."""
         band = macos_title_bar.finish(self)
         if band is None:
-            # AppKit did not take it: bring the normal title bar back rather than leave
-            # its text and buttons over the top bar. Flags cannot change inside showEvent.
-            self._merges_title_bar = False
-            QTimer.singleShot(0, self._restore_native_title_bar)
+            self._give_up_title_bar()
             return
         self._title_bar_band = band
         self.top_bar.fit_title_bar(band.height, band.controls_centre)
         self.top_bar.enable_window_drag(lambda: macos_title_bar.double_click_title_bar(self))
         self._sync_title_bar_lead()
+        # AppKit lays the window out after this showEvent; check the band's clicks then.
+        QTimer.singleShot(0, self._check_title_bar_clicks)
+
+    #: How often, and how many times, to look again while AppKit has not placed the views.
+    _TITLE_BAR_CHECK_MS = 50
+    _TITLE_BAR_CHECKS = 20
+
+    def _check_title_bar_clicks(self, attempt: int = 1) -> None:
+        band = self._title_bar_band
+        if not self._merges_title_bar or band is None:
+            return
+        target = macos_title_bar.band_click_target(self, band)
+        if target == macos_title_bar.CLICKS_NOT_PLACED_YET and attempt < self._TITLE_BAR_CHECKS:
+            QTimer.singleShot(self._TITLE_BAR_CHECK_MS, lambda: self._check_title_bar_clicks(attempt + 1))
+        elif target != macos_title_bar.CLICKS_REACH_CONTENT:
+            self._give_up_title_bar()  # the band keeps the clicks, or it never settled
+
+    def _give_up_title_bar(self) -> None:
+        """Brings the normal title bar back (AppKit refused, or keeps the band's clicks).
+
+        Better than leaving the title text and buttons over the top bar, or top-bar
+        buttons that cannot be clicked (macOS 15). Flags cannot change inside showEvent.
+        """
+        self._merges_title_bar = False
+        QTimer.singleShot(0, self._restore_native_title_bar)
 
     def _restore_native_title_bar(self) -> None:
         self._title_bar_band = None
+        macos_title_bar.undo(self)
         macos_title_bar.release_expanded_client_area(self)
         self.top_bar.fit_title_bar(theme.TOP_BAR_HEIGHT)
         self.top_bar.set_leading_space(0)
+        self.top_bar.disable_window_drag()
         self.show()
 
     def _sync_title_bar_lead(self) -> None:

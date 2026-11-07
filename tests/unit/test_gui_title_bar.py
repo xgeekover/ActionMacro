@@ -7,6 +7,8 @@ offscreen and runs in the macOS CI job.
 
 from __future__ import annotations
 
+import platform
+
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
@@ -135,6 +137,14 @@ def test_fit_title_bar_centres_the_items_on_the_given_line(bar, qtbot):
     assert bar.height() == theme.TOP_BAR_HEIGHT and margins.top() == margins.bottom() == 0
 
 
+def test_disable_window_drag_gives_the_bar_back_its_clicks(bar):
+    bar.enable_window_drag(lambda: bar.double_clicks.append(1))
+    bar.disable_window_drag()
+    _drag(bar.lbl_brand, 40)
+    QTest.mouseDClick(bar.lbl_brand, Qt.MouseButton.LeftButton)
+    assert bar.moves == [] and bar.double_clicks == [] and not bar.is_window_drag_enabled()
+
+
 def test_double_click_setting_mapping():
     assert macos_title_bar.double_click_action(None) == "zoom"  # never changed: Zoom
     assert macos_title_bar.double_click_action(None, legacy_minimize=True) == "minimize"
@@ -148,6 +158,9 @@ def test_not_supported_without_pyobjc(monkeypatch):
     monkeypatch.setattr(macos_title_bar, "_appkit", lambda: None)
     assert not macos_title_bar.supported()
     assert macos_title_bar.finish(object()) is None
+    band = macos_title_bar.TitleBarBand(height=38, controls_right=66, controls_centre=19.0)
+    assert macos_title_bar.band_click_target(object(), band) == macos_title_bar.CLICKS_STAY_IN_TITLE_BAR
+    macos_title_bar.undo(object())  # nothing to undo, no error
 
 
 # -----------------------------------------------------------------------------
@@ -166,13 +179,48 @@ def test_other_platforms_keep_the_normal_title_bar(window, qtbot):
     assert not win.top_bar.is_window_drag_enabled()
 
 
-def test_macos_top_bar_takes_the_title_bar_place(cocoa, window, qtbot):
-    import AppKit
+def _settled(win) -> bool:
+    """The deferred click check has run: merged with a clickable band, or fallen back."""
+    if not win._merges_title_bar:
+        return not macos_title_bar.has_expanded_client_area(win) and win.isVisible()
+    band = win._title_bar_band
+    return band is not None and (macos_title_bar.band_click_target(win, band)
+                                 == macos_title_bar.CLICKS_REACH_CONTENT)
 
+
+def _shown(window, qtbot) -> MainWindow:
     win = window()
     win.resize(1200, 760)
     win.show()
     qtbot.waitExposed(win)
+    qtbot.waitUntil(lambda: _settled(win), timeout=3000)
+    qtbot.waitExposed(win)
+    return win
+
+
+def _macos() -> str:
+    return f"macOS {platform.mac_ver()[0]}"
+
+
+def _assert_normal_title_bar(win) -> None:
+    import AppKit
+
+    native = macos_title_bar.ns_window(win)
+    assert not macos_title_bar.has_expanded_client_area(win)
+    assert win.frameGeometry().height() > win.geometry().height()  # the title bar is back
+    assert native.titleVisibility() == AppKit.NSWindowTitleVisible
+    assert native.toolbar() is None
+    assert win.top_bar.height() == theme.TOP_BAR_HEIGHT
+    assert win.top_bar.leading_space() == TopBar.LEFT_MARGIN
+    assert not win.top_bar.is_window_drag_enabled()
+
+
+def test_macos_top_bar_takes_the_title_bar_place(cocoa, window, qtbot):
+    import AppKit
+
+    win = _shown(window, qtbot)
+    if not win._merges_title_bar:
+        pytest.skip(f"{_macos()}: the title bar keeps clicks in its band, so the window keeps it")
     native = macos_title_bar.ns_window(win)
     band = win._title_bar_band
     assert band is not None and band.height >= 28
@@ -209,13 +257,31 @@ def test_macos_top_bar_takes_the_title_bar_place(cocoa, window, qtbot):
     assert win.top_bar.is_window_drag_enabled()
 
 
-def test_macos_falls_back_to_the_normal_title_bar(cocoa, window, qtbot, monkeypatch):
-    monkeypatch.setattr(macos_title_bar, "finish", lambda w: None)
+def test_macos_keeps_the_normal_title_bar_where_its_band_keeps_the_clicks(cocoa, window, qtbot):
+    """macOS 15: the toolbar view takes clicks in the band, so the top bar's buttons would be dead."""
+    win = _shown(window, qtbot)
+    if win._merges_title_bar:
+        pytest.skip(f"{_macos()}: clicks in the title bar band reach the Qt widgets")
+    _assert_normal_title_bar(win)
+
+
+@pytest.mark.parametrize("cause", ["appkit refused", "band keeps the clicks", "band never settles",
+                                   "band keeps the clicks once placed"])
+def test_macos_falls_back_to_the_normal_title_bar(cocoa, window, qtbot, monkeypatch, cause):
+    pending, title_bar = macos_title_bar.CLICKS_NOT_PLACED_YET, macos_title_bar.CLICKS_STAY_IN_TITLE_BAR
+    if cause == "appkit refused":
+        monkeypatch.setattr(macos_title_bar, "finish", lambda w: None)
+    elif cause == "band keeps the clicks":
+        monkeypatch.setattr(macos_title_bar, "band_click_target", lambda w, band: title_bar)
+    elif cause == "band never settles":
+        monkeypatch.setattr(macos_title_bar, "band_click_target", lambda w, band: pending)
+        monkeypatch.setattr(MainWindow, "_TITLE_BAR_CHECK_MS", 5)
+    else:
+        answers = iter([pending, pending])
+        monkeypatch.setattr(macos_title_bar, "band_click_target", lambda w, band: next(answers, title_bar))
     win = window()
     win.show()
     qtbot.waitUntil(lambda: not macos_title_bar.has_expanded_client_area(win) and win.isVisible(),
                     timeout=3000)
     qtbot.waitExposed(win)
-    assert win.frameGeometry().height() > win.geometry().height()  # the title bar is back
-    assert win.top_bar.height() == theme.TOP_BAR_HEIGHT
-    assert win.top_bar.leading_space() == TopBar.LEFT_MARGIN
+    _assert_normal_title_bar(win)
